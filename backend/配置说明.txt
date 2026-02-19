@@ -1,0 +1,76 @@
+====================================
+DeepSeek API 配置说明
+====================================
+
+请在 backend 目录下创建 .env 文件，内容如下：
+
+# OpenAI API 配置（使用 DeepSeek）
+OPENAI_API_KEY=sk-3acec92e29fe4df383224c493f044c67
+OPENAI_BASE_URL=https://api.deepseek.com/v1
+OPENAI_MODEL=deepseek-reasoner
+
+# 搜索引擎 API 配置（节点自主感知功能）
+# Tavily API（推荐，专为 LLM 设计）
+TAVILY_API_KEY=your-tavily-api-key-here
+
+# Serper API（备用）
+SERPER_API_KEY=your-serper-api-key-here
+
+# 服务器配置
+HOST=0.0.0.0
+PORT=8000
+
+====================================
+搜索引擎 API 获取方式：
+====================================
+
+【Tavily API】（推荐）
+1. 访问: https://tavily.com
+2. 注册账号并获取 API Key
+3. 免费额度: 1000 次/月
+4. 特点: 专为 LLM 设计，返回结构化数据
+
+【Serper API】（备用）
+1. 访问: https://serper.dev
+2. 注册账号并获取 API Key
+3. 免费额度: 2500 次/月
+4. 特点: Google 搜索 API 封装
+
+注意: 至少配置一个搜索引擎 API，否则节点自主感知功能无法使用
+
+====================================
+创建步骤：
+====================================
+
+1. 在 backend 目录下创建一个新文件，命名为 .env
+2. 复制上面的配置内容到 .env 文件中
+3. 保存文件
+
+或者在命令行中执行：
+
+cd backend
+copy .env.example .env
+
+然后编辑 .env 文件，填入上面的配置内容。
+
+====================================
+启动服务：
+====================================
+
+配置完成后，在 backend 目录下运行：
+
+python main.py
+
+服务将在 http://localhost:8000 启动
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,227 @@
+{
+  "version": "1.0.0",
+  "description": "CausalFlow 金融数据源配置 - 机构级白名单",
+  
+  "search_domains": {
+    "description": "权威金融媒体和机构官网域名白名单（用于新闻/情绪搜索）",
+    
+    "tier_1_premium_news": {
+      "description": "顶级付费墙媒体（高权威但可能数据稀缺）",
+      "domains": [
+        "bloomberg.com",
+        "reuters.com",
+        "ft.com",
+        "wsj.com",
+        "nikkei.com"
+      ]
+    },
+    
+    "tier_2_aggregators": {
+      "description": "财经聚合器（易抓取结构化数值，无付费墙）",
+      "domains": [
+        "tradingeconomics.com",
+        "investing.com",
+        "finance.yahoo.com",
+        "cnbc.com",
+        "marketwatch.com"
+      ]
+    },
+    
+    "china_news": {
+      "description": "中国财经媒体",
+      "domains": [
+        "caixin.com",
+        "yicai.com",
+        "21jingji.com"
+      ]
+    },
+    
+    "institutional_sites": {
+      "description": "官方机构网站",
+      "domains": [
+        "imf.org",
+        "bis.org",
+        "worldbank.org",
+        "federalreserve.gov",
+        "pbc.gov.cn",
+        "stats.gov.cn",
+        "sec.gov",
+        "sse.com.cn",
+        "szse.cn"
+      ]
+    },
+    
+    "broker_and_portals": {
+      "description": "券商门户和财经聚合平台（中国市场）",
+      "domains": [
+        "eastmoney.com",
+        "10jqka.com.cn",
+        "finance.sina.com.cn",
+        "wallstreetcn.com",
+        "investing.com"
+      ]
+    }
+  },
+  
+  "structured_apis": {
+    "description": "结构化数据 API 配置（用于精确数值获取）",
+    
+    "fred": {
+      "name": "Federal Reserve Economic Data",
+      "provider": "Federal Reserve Bank of St. Louis",
+      "base_url": "https://api.stlouisfed.org/fred",
+      "auth_type": "api_key",
+      "env_key": "FRED_API_KEY",
+      "capabilities": [
+        "us_interest_rate",
+        "us_inflation",
+        "us_gdp",
+        "us_unemployment",
+        "us_m2_money_supply"
+      ],
+      "node_types": ["macro_indicator", "monetary_policy"],
+      "status": "mock"
+    },
+    
+    "tushare": {
+      "name": "Tushare Pro",
+      "provider": "Tushare",
+      "base_url": "http://api.tushare.pro",
+      "auth_type": "token",
+      "env_key": "TUSHARE_TOKEN",
+      "capabilities": [
+        "china_stock_price",
+        "china_macro_data",
+        "china_index",
+        "china_fund_data"
+      ],
+      "node_types": ["stock_price", "macro_indicator"],
+      "status": "mock"
+    },
+    
+    "sec_edgar": {
+      "name": "SEC EDGAR",
+      "provider": "U.S. Securities and Exchange Commission",
+      "base_url": "https://data.sec.gov",
+      "auth_type": "user_agent",
+      "env_key": null,
+      "capabilities": [
+        "us_company_filings",
+        "10k_reports",
+        "10q_reports",
+        "13f_holdings"
+      ],
+      "node_types": ["company_fundamentals", "institutional_holdings"],
+      "status": "mock"
+    },
+    
+    "ccxt": {
+      "name": "CCXT Crypto Exchange API",
+      "provider": "CCXT Library",
+      "base_url": "various",
+      "auth_type": "exchange_specific",
+      "env_key": null,
+      "capabilities": [
+        "crypto_price",
+        "crypto_volume",
+        "crypto_orderbook"
+      ],
+      "node_types": ["crypto_price", "market_liquidity"],
+      "status": "mock"
+    },
+    
+    "polygon": {
+      "name": "Polygon.io",
+      "provider": "Polygon.io",
+      "base_url": "https://api.polygon.io",
+      "auth_type": "api_key",
+      "env_key": "POLYGON_API_KEY",
+      "capabilities": [
+        "us_stock_price",
+        "us_stock_volume",
+        "forex_rate",
+        "crypto_price"
+      ],
+      "node_types": ["stock_price", "forex_rate", "crypto_price"],
+      "status": "mock"
+    }
+  },
+  
+  "routing_rules": {
+    "description": "节点类型到数据源的路由规则",
+    
+    "macro_indicator": {
+      "primary_strategy": "structured_api",
+      "fallback_strategy": "news_search",
+      "preferred_apis": ["fred", "tushare"],
+      "tier_1_domains": ["imf.org", "bis.org", "federalreserve.gov", "pbc.gov.cn", "stats.gov.cn"],
+      "tier_2_domains": ["tradingeconomics.com", "investing.com", "finance.yahoo.com"]
+    },
+    
+    "monetary_policy": {
+      "primary_strategy": "structured_api",
+      "fallback_strategy": "news_search",
+      "preferred_apis": ["fred"],
+      "tier_1_domains": ["federalreserve.gov", "pbc.gov.cn", "reuters.com", "bloomberg.com"],
+      "tier_2_domains": ["tradingeconomics.com", "investing.com", "cnbc.com"]
+    },
+    
+    "stock_price": {
+      "primary_strategy": "structured_api",
+      "fallback_strategy": "news_search",
+      "preferred_apis": ["tushare", "polygon"],
+      "tier_1_domains": ["bloomberg.com", "reuters.com", "wsj.com"],
+      "tier_2_domains": ["finance.yahoo.com", "marketwatch.com", "investing.com"]
+    },
+    
+    "crypto_price": {
+      "primary_strategy": "structured_api",
+      "fallback_strategy": "news_search",
+      "preferred_apis": ["ccxt", "polygon"],
+      "tier_1_domains": ["coindesk.com", "cointelegraph.com"],
+      "tier_2_domains": ["investing.com", "finance.yahoo.com"]
+    },
+    
+    "geopolitical_risk": {
+      "primary_strategy": "news_search",
+      "fallback_strategy": null,
+      "preferred_apis": [],
+      "tier_1_domains": ["reuters.com", "ft.com", "wsj.com", "bloomberg.com", "caixin.com"],
+      "tier_2_domains": ["cnbc.com", "marketwatch.com"]
+    },
+    
+    "market_sentiment": {
+      "primary_strategy": "news_search",
+      "fallback_strategy": null,
+      "preferred_apis": [],
+      "tier_1_domains": ["bloomberg.com", "reuters.com", "ft.com", "wsj.com"],
+      "tier_2_domains": ["cnbc.com", "marketwatch.com", "investing.com"]
+    },
+    
+    "company_fundamentals": {
+      "primary_strategy": "structured_api",
+      "fallback_strategy": "news_search",
+      "preferred_apis": ["sec_edgar"],
+      "tier_1_domains": ["sec.gov", "bloomberg.com", "reuters.com"],
+      "tier_2_domains": ["marketwatch.com", "finance.yahoo.com"]
+    }
+  },
+  
+  "waterfall_config": {
+    "description": "瀑布流搜索配置",
+    "attempt_1": {
+      "description": "首次尝试：Tier 1 + Tier 2 白名单",
+      "time_window": "7 days",
+      "use_domain_filter": true,
+      "max_results": 5
+    },
+    "attempt_2": {
+      "description": "降级尝试：全网搜索 + LLM 权威性判断",
+      "time_window": "30 days",
+      "use_domain_filter": false,
+      "max_results": 10,
+      "llm_authority_check": true
+    }
+  }
+}
+
