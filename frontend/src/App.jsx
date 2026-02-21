@@ -20,7 +20,7 @@ function App() {
     setHasAnalyzed(true) // 触发布局切换
     
     try {
-      const response = await fetch('http://localhost:8000/api/v1/analyze-v2', {
+      const response = await fetch('causal-engine-production.up.railway.app/api/v1/analyze-v2', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
