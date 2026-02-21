@@ -8,7 +8,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        causal-engine-production.up.railway.app,
+        target:'causal-engine-production.up.railway.app',
         changeOrigin: true,
       }
     }
