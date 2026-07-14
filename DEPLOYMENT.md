@@ -14,7 +14,7 @@
 在项目根目录创建 `.env` 文件：
 
 ```bash
-OPENAI_API_KEY=sk-3acec92e29fe4df383224c493f044c67
+OPENAI_API_KEY=your_api_key_here
 OPENAI_BASE_URL=https://api.deepseek.com/v1
 OPENAI_MODEL=deepseek-reasoner
 ```
@@ -288,4 +288,22 @@ sudo systemctl restart causal-backend
 cd ../frontend && npm install && npm run build
 sudo cp -r dist/* /var/www/html/
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

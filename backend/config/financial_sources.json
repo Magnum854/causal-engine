@@ -147,6 +147,50 @@
     }
   },
   
+  "node_type_categories": {
+    "description": "节点类型分类：定量型 vs 定性型",
+    "quantitative": {
+      "description": "可提取具体数值的节点类型",
+      "types": [
+        "macro_indicator",
+        "monetary_policy",
+        "stock_price",
+        "crypto_price",
+        "forex_rate",
+        "commodity_price",
+        "interest_rate",
+        "inflation_rate",
+        "gdp_growth",
+        "unemployment_rate",
+        "company_fundamentals",
+        "market_liquidity"
+      ]
+    },
+    "qualitative": {
+      "description": "需要情绪/事件分析的节点类型",
+      "types": [
+        "geopolitical_risk",
+        "market_sentiment",
+        "policy_expectation",
+        "regulatory_change",
+        "social_event",
+        "industry_trend",
+        "consumer_confidence",
+        "investor_sentiment",
+        "political_stability",
+        "trade_relations",
+        "technology_disruption",
+        "environmental_risk"
+      ],
+      "intensity_levels": {
+        "risk_based": ["极高风险", "高风险", "中等风险", "低风险", "极低风险"],
+        "sentiment_based": ["极度乐观", "乐观", "中性", "悲观", "极度悲观"],
+        "trend_based": ["强烈上升", "上升", "稳定", "下降", "强烈下降"],
+        "expectation_based": ["强烈预期", "预期", "不确定", "不预期", "强烈不预期"]
+      }
+    }
+  },
+  
   "routing_rules": {
     "description": "节点类型到数据源的路由规则",
     
@@ -155,7 +199,8 @@
       "fallback_strategy": "news_search",
       "preferred_apis": ["fred", "tushare"],
       "tier_1_domains": ["imf.org", "bis.org", "federalreserve.gov", "pbc.gov.cn", "stats.gov.cn"],
-      "tier_2_domains": ["tradingeconomics.com", "investing.com", "finance.yahoo.com"]
+      "tier_2_domains": ["tradingeconomics.com", "investing.com", "finance.yahoo.com"],
+      "data_type": "quantitative"
     },
     
     "monetary_policy": {
@@ -163,7 +208,8 @@
       "fallback_strategy": "news_search",
       "preferred_apis": ["fred"],
       "tier_1_domains": ["federalreserve.gov", "pbc.gov.cn", "reuters.com", "bloomberg.com"],
-      "tier_2_domains": ["tradingeconomics.com", "investing.com", "cnbc.com"]
+      "tier_2_domains": ["tradingeconomics.com", "investing.com", "cnbc.com"],
+      "data_type": "quantitative"
     },
     
     "stock_price": {
@@ -171,7 +217,8 @@
       "fallback_strategy": "news_search",
       "preferred_apis": ["tushare", "polygon"],
       "tier_1_domains": ["bloomberg.com", "reuters.com", "wsj.com"],
-      "tier_2_domains": ["finance.yahoo.com", "marketwatch.com", "investing.com"]
+      "tier_2_domains": ["finance.yahoo.com", "marketwatch.com", "investing.com"],
+      "data_type": "quantitative"
     },
     
     "crypto_price": {
@@ -179,7 +226,8 @@
       "fallback_strategy": "news_search",
       "preferred_apis": ["ccxt", "polygon"],
       "tier_1_domains": ["coindesk.com", "cointelegraph.com"],
-      "tier_2_domains": ["investing.com", "finance.yahoo.com"]
+      "tier_2_domains": ["investing.com", "finance.yahoo.com"],
+      "data_type": "quantitative"
     },
     
     "geopolitical_risk": {
@@ -187,7 +235,9 @@
       "fallback_strategy": null,
       "preferred_apis": [],
       "tier_1_domains": ["reuters.com", "ft.com", "wsj.com", "bloomberg.com", "caixin.com"],
-      "tier_2_domains": ["cnbc.com", "marketwatch.com"]
+      "tier_2_domains": ["cnbc.com", "marketwatch.com"],
+      "data_type": "qualitative",
+      "intensity_scale": "risk_based"
     },
     
     "market_sentiment": {
@@ -195,7 +245,29 @@
       "fallback_strategy": null,
       "preferred_apis": [],
       "tier_1_domains": ["bloomberg.com", "reuters.com", "ft.com", "wsj.com"],
-      "tier_2_domains": ["cnbc.com", "marketwatch.com", "investing.com"]
+      "tier_2_domains": ["cnbc.com", "marketwatch.com", "investing.com"],
+      "data_type": "qualitative",
+      "intensity_scale": "sentiment_based"
+    },
+    
+    "policy_expectation": {
+      "primary_strategy": "news_search",
+      "fallback_strategy": null,
+      "preferred_apis": [],
+      "tier_1_domains": ["reuters.com", "bloomberg.com", "ft.com", "wsj.com", "caixin.com"],
+      "tier_2_domains": ["cnbc.com", "marketwatch.com", "wallstreetcn.com"],
+      "data_type": "qualitative",
+      "intensity_scale": "expectation_based"
+    },
+    
+    "regulatory_change": {
+      "primary_strategy": "news_search",
+      "fallback_strategy": null,
+      "preferred_apis": [],
+      "tier_1_domains": ["sec.gov", "reuters.com", "bloomberg.com", "ft.com"],
+      "tier_2_domains": ["cnbc.com", "marketwatch.com"],
+      "data_type": "qualitative",
+      "intensity_scale": "risk_based"
     },
     
     "company_fundamentals": {
@@ -203,7 +275,8 @@
       "fallback_strategy": "news_search",
       "preferred_apis": ["sec_edgar"],
       "tier_1_domains": ["sec.gov", "bloomberg.com", "reuters.com"],
-      "tier_2_domains": ["marketwatch.com", "finance.yahoo.com"]
+      "tier_2_domains": ["marketwatch.com", "finance.yahoo.com"],
+      "data_type": "quantitative"
     }
   },
   

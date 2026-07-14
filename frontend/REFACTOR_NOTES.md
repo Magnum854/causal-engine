@@ -136,7 +136,9 @@ const [hasAnalyzed, setHasAnalyzed] = useState(false)
 ## 关键改进
 
 ### 1. 移除的组件
-- ❌ `DataSourcesPanel.jsx` - 不再使用底部固定面板
+- ✅ `DataSourcesPanel.jsx` - 已删除,不再使用底部固定面板
+- ✅ `Sidebar.jsx` - 已删除,被 NodeDetailDrawer 替代
+- ✅ `CausalGraphViewer.jsx` - 已删除,被直接使用 CausalGraph 替代
 - ❌ 顶部 Header - 简化为侧边栏标题
 
 ### 2. 布局优势
@@ -274,13 +276,27 @@ import { motion } from 'framer-motion'
 **已修改**：
 - ✅ `frontend/src/App.jsx` - 主布局重构
 
-**可删除**（已不使用）：
-- ⚠️ `frontend/src/components/DataSourcesPanel.jsx` - 可选删除
+**已删除**（不再使用）：
+- ✅ `frontend/src/components/DataSourcesPanel.jsx` - 已删除
+- ✅ `frontend/src/components/Sidebar.jsx` - 已删除
+- ✅ `frontend/src/components/CausalGraphViewer.jsx` - 已删除
+
+**已移动到 demo 目录**：
+- ✅ `frontend/src/demo/ExamplePage.jsx` - 示例页面
+- ✅ `frontend/src/demo/StreamingResearchPage.jsx` - 流式研究演示
+- ✅ `frontend/src/demo/NodeDetailDrawerDemo.jsx` - 组件演示
+- ✅ `frontend/src/demo/AnimationDemo.jsx` - 动画测试
+- ✅ `frontend/src/demo/LoadingOverlay.jsx` - 加载组件
+- ✅ `frontend/src/demo/NodeDetailDrawer.example.jsx` - 示例代码
+- ✅ `frontend/src/demo/NodeDetailDrawer.testData.js` - 测试数据
+- ✅ `frontend/src/demo/NodeDetailDrawer.README.md` - 组件文档
+- ✅ `frontend/src/demo/NodeDetailDrawer.integration.md` - 集成指南
 
 **未修改**（继续使用）：
 - ✅ `frontend/src/components/QueryPanel.jsx`
 - ✅ `frontend/src/components/CausalGraph.jsx`
 - ✅ `frontend/src/components/CustomNode.jsx`
+- ✅ `frontend/src/components/NodeDetailDrawer.jsx`
 
 ---
 
@@ -341,4 +357,22 @@ const debouncedAnalyze = useMemo(
 
 生成时间: 2026-02-19 21:45  
 重构版本: 2.0 (Perplexity Style)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

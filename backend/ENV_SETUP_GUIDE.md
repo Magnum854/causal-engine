@@ -30,7 +30,7 @@ New-Item -Path "X:\因果引擎\backend\.env" -ItemType File
 
 ```env
 # OpenAI API 配置（DeepSeek）
-OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+OPENAI_API_KEY=your_api_key_here
 OPENAI_BASE_URL=https://api.deepseek.com/v1
 OPENAI_MODEL=deepseek-reasoner
 
@@ -80,7 +80,7 @@ python main.py
 # ============================================
 # OpenAI API 配置
 # ============================================
-OPENAI_API_KEY=sk-1234567890abcdefghijklmnopqrstuvwxyz
+OPENAI_API_KEY=your_api_key_here
 OPENAI_BASE_URL=https://api.deepseek.com/v1
 OPENAI_MODEL=deepseek-reasoner
 
@@ -145,4 +145,22 @@ Windows 资源管理器不允许创建以点开头的文件。解决方法：
 ---
 
 生成时间: 2026-02-19 22:05
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

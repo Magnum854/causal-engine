@@ -12,14 +12,64 @@ from app.services.enhanced_research_service import EnhancedTargetResearchService
 from app.services.two_pass_causal_service import TwoPassCausalService
 
 router = APIRouter()
-causal_service = CausalService()
-news_extraction_service = NewsExtractionService()
-summary_service = SummaryGenerationService()
-target_research_service = TargetResearchService()
-streaming_research_service = StreamingTargetResearchService()
-node_sensing_service = NodeSensingService()
-enhanced_research_service = EnhancedTargetResearchService()
-two_pass_service = TwoPassCausalService()
+
+# 延迟初始化服务实例，避免在导入时就需要环境变量
+_causal_service = None
+_news_extraction_service = None
+_summary_service = None
+_target_research_service = None
+_streaming_research_service = None
+_node_sensing_service = None
+_enhanced_research_service = None
+_two_pass_service = None
+
+def get_causal_service():
+    global _causal_service
+    if _causal_service is None:
+        _causal_service = CausalService()
+    return _causal_service
+
+def get_news_extraction_service():
+    global _news_extraction_service
+    if _news_extraction_service is None:
+        _news_extraction_service = NewsExtractionService()
+    return _news_extraction_service
+
+def get_summary_service():
+    global _summary_service
+    if _summary_service is None:
+        _summary_service = SummaryGenerationService()
+    return _summary_service
+
+def get_target_research_service():
+    global _target_research_service
+    if _target_research_service is None:
+        _target_research_service = TargetResearchService()
+    return _target_research_service
+
+def get_streaming_research_service():
+    global _streaming_research_service
+    if _streaming_research_service is None:
+        _streaming_research_service = StreamingTargetResearchService()
+    return _streaming_research_service
+
+def get_node_sensing_service():
+    global _node_sensing_service
+    if _node_sensing_service is None:
+        _node_sensing_service = NodeSensingService()
+    return _node_sensing_service
+
+def get_enhanced_research_service():
+    global _enhanced_research_service
+    if _enhanced_research_service is None:
+        _enhanced_research_service = EnhancedTargetResearchService()
+    return _enhanced_research_service
+
+def get_two_pass_service():
+    global _two_pass_service
+    if _two_pass_service is None:
+        _two_pass_service = TwoPassCausalService()
+    return _two_pass_service
 
 class CausalQuery(BaseModel):
     """因果推演查询请求"""
@@ -72,7 +122,7 @@ async def analyze_causal_chain(query: CausalQuery):
     分析因果链（旧版本，保持兼容）
     """
     try:
-        result = await causal_service.analyze(
+        result = await get_causal_service().analyze(
             query.query, 
             query.context, 
             query.max_depth
@@ -129,7 +179,7 @@ async def analyze_causal_chain_v2(query: CausalQuery):
     - ✅ 并发处理提升性能
     """
     try:
-        result = await two_pass_service.analyze_two_pass(
+        result = await get_two_pass_service().analyze_two_pass(
             query.query,
             query.context
         )
@@ -162,11 +212,11 @@ async def extract_causality(request: NewsExtractionRequest):
     """
     try:
         # 1. 调用新闻提取服务，获取因果图数据
-        result = await news_extraction_service.extract_causality(request.news_text)
+        result = await get_news_extraction_service().extract_causality(request.news_text)
         
         # 2. 如果需要生成摘要，调用摘要生成服务
         if request.generate_summary:
-            result = await summary_service.generate_causal_summary_safe(result)
+            result = await get_summary_service().generate_causal_summary_safe(result)
         
         # 3. 返回结果（包含可选的 summary 字段）
         return result
@@ -217,7 +267,7 @@ async def research_target_stream(request: TargetResearchRequest):
     async def event_generator():
         """生成 SSE 事件流"""
         try:
-            async for event in streaming_research_service.stream_research_target(request.target):
+            async for event in get_streaming_research_service().stream_research_target(request.target):
                 # 发送事件数据
                 yield f"data: {event}\n\n"
         except Exception as e:
@@ -266,7 +316,7 @@ async def research_target(request: TargetResearchRequest):
     """
     try:
         # 执行完整的研究 Pipeline
-        result = await target_research_service.research_target(request.target)
+        result = await get_target_research_service().research_target(request.target)
         
         return result
         
@@ -325,7 +375,7 @@ async def research_target_enhanced(request: TargetResearchRequest):
     """
     try:
         # 执行增强型研究 Pipeline
-        result = await enhanced_research_service.research_target_with_sensing(
+        result = await get_enhanced_research_service().research_target_with_sensing(
             request.target
         )
         
@@ -392,7 +442,7 @@ async def enrich_nodes(request: NodeEnrichmentRequest):
             raise ValueError("节点列表不能为空")
         
         # 批量并发处理节点状态更新
-        enriched_nodes = await node_sensing_service.enrich_nodes_batch(request.nodes)
+        enriched_nodes = await get_node_sensing_service().enrich_nodes_batch(request.nodes)
         
         return {
             "success": True,

@@ -7,6 +7,11 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 import random
 
+try:
+    import yfinance as yf
+except Exception:  # pragma: no cover - optional runtime dependency
+    yf = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,7 +53,9 @@ class StructuredAPIService:
         """
         logger.info(f"[StructuredAPI] 调用 {api_name} 获取 {node_label} 数据")
         
-        if api_name == "fred":
+        if api_name == "yfinance":
+            return await self._fetch_yfinance(node_label, node_type)
+        elif api_name == "fred":
             return await self._fetch_fred(node_label, node_type)
         elif api_name == "tushare":
             return await self._fetch_tushare(node_label, node_type)
@@ -60,6 +67,61 @@ class StructuredAPIService:
             return await self._fetch_polygon(node_label, node_type)
         else:
             logger.warning(f"[StructuredAPI] 未知 API: {api_name}")
+            return None
+
+    async def _fetch_yfinance(self, node_label: str, node_type: str) -> Optional[Dict[str, Any]]:
+        """Fetch liquid market prices through yfinance when a label can be mapped to a ticker."""
+        if yf is None:
+            logger.warning("[StructuredAPI] yfinance is not installed")
+            return None
+
+        label = node_label.lower()
+        ticker_map = {
+            "黄金": "GC=F",
+            "gold": "GC=F",
+            "美元指数": "DX-Y.NYB",
+            "dxy": "DX-Y.NYB",
+            "标普": "^GSPC",
+            "s&p": "^GSPC",
+            "纳斯达克": "^IXIC",
+            "日元": "JPY=X",
+            "人民币": "CNY=X",
+            "原油": "CL=F",
+            "比特币": "BTC-USD",
+            "bitcoin": "BTC-USD",
+        }
+        ticker = None
+        for key, value in ticker_map.items():
+            if key in node_label or key in label:
+                ticker = value
+                break
+        if not ticker:
+            return None
+
+        try:
+            quote = yf.Ticker(ticker)
+            history = quote.history(period="5d")
+            if history.empty:
+                return None
+            latest = history.iloc[-1]
+            previous = history.iloc[-2] if len(history) > 1 else latest
+            latest_close = float(latest["Close"])
+            previous_close = float(previous["Close"])
+            change_pct = 0.0 if previous_close == 0 else ((latest_close - previous_close) / previous_close) * 100
+            return {
+                "value": f"{latest_close:.2f}",
+                "unit": "market_price",
+                "timestamp": datetime.utcnow().isoformat(),
+                "source": "Yahoo Finance",
+                "metadata": {
+                    "ticker": ticker,
+                    "api": "yfinance",
+                    "change_pct": f"{change_pct:+.2f}%",
+                    "node_type": node_type,
+                },
+            }
+        except Exception as exc:
+            logger.warning(f"[StructuredAPI] yfinance fetch failed for {node_label}: {exc}")
             return None
     
     async def _fetch_fred(self, node_label: str, node_type: str) -> Dict[str, Any]:
@@ -282,4 +344,22 @@ class StructuredAPIService:
                 "api": "polygon"
             }
         }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
