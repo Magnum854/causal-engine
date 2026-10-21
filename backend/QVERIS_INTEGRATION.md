@@ -21,11 +21,11 @@ backend/
 
 ### 1. 环境变量
 
-在 `backend/.env` 文件中已配置：
+在本机 `backend/.env` 中按需配置自己的密钥（示例为占位符）：
 
 ```env
 # QVeris 真实世界数据源 API
-QVERIS_API_KEY=sk-NQ-pJnadi4ow0f9mQIh6JML9YFspoS5HCa2j55AO8K4
+QVERIS_API_KEY=your_qveris_api_key_here
 ```
 
 ### 2. API 端点配置

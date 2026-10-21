@@ -1,8 +1,12 @@
-# 因果推演引擎 MVP
+# CausalFlow — 因果推演引擎
+
+由 [Magnum854](https://github.com/Magnum854) 维护的 React + FastAPI 宏观事件因果分析工作台。项目以 CausalFlow v2 会话工作流为主线，代码按 [MIT License](LICENSE) 开源；依赖项保留各自的许可证。
+
+维护范围包括多输入分析、图谱交互、会话持久化、接口与部署配置。参与开发见 [CONTRIBUTING.md](CONTRIBUTING.md)，密钥处理见 [SECURITY.md](SECURITY.md)。
 
 ## CausalFlow v2 当前状态
 
-截至 2026-05-05，项目已新增 CausalFlow v2 工作台：
+当前主线为 CausalFlow v2 工作台：
 
 - 多输入综合分析：左侧面板可输入多条事件/数据/新闻/问题，后端通过 `/api/v2/sessions/{session_id}/synthesize` 以 SSE 推送阶段进度。
 - 深度迭代扩展：后端通过 `/api/v2/sessions/{session_id}/analyze-deep` 按层生成增量图谱。
@@ -10,6 +14,8 @@
 - 节点扩展：点击图谱节点后，可通过 `/api/v2/sessions/{session_id}/expand` 扩展原因、影响或相关因素。
 - 图谱呈现：前端使用分层泳道布局、聚类筛选、主干/聚焦/全部边模式，避免大图节点重叠和连线过密。
 - 数据管道：搜索感知支持 15 秒超时、3 次指数退避、15 分钟缓存和来源质量评分；结构化数据服务新增 yfinance 入口。
+
+没有配置 LLM 密钥时，v2 可以使用确定性规则生成基础图谱。实时搜索、模型推理与外部数据增强需要各自的服务配置；规则图谱不代表已经核实的实时因果关系。
 
 **API 版本说明:**
 - **v2 API** (推荐): 会话式设计，支持多轮交互、撤销/重做、多输入综合分析。详见 `backend/API_VERSIONS.md`
@@ -134,13 +140,14 @@ pip install -r requirements.txt
 pip install duckduckgo-search
 
 # 创建 .env 配置文件
-# 将以下内容保存到 backend/.env 文件：
+# 复制模板，按需在本机填写密钥：
+cp .env.example .env
 ```
 
 **backend/.env 文件内容:**
 ```env
 # DeepSeek/OpenAI 兼容 API 配置
-OPENAI_API_KEY=your_api_key_here
+OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.deepseek.com/v1
 OPENAI_MODEL=deepseek-chat
 
@@ -151,6 +158,8 @@ PORT=8000
 # 搜索引擎配置（使用免费的 DuckDuckGo）
 SEARCH_ENGINE=duckduckgo
 ```
+
+`OPENAI_API_KEY` 留空可先体验 v2 规则图谱。真实密钥只放入被 Git 忽略的 `backend/.env`；不要提交到示例、文档、截图或 Issue。
 
 ```bash
 # 启动后端服务

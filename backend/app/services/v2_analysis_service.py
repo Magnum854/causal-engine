@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 from copy import deepcopy
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
@@ -42,7 +43,7 @@ class V2SessionStore:
         return conn
 
     def _init_db(self) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
@@ -72,7 +73,7 @@ class V2SessionStore:
         return session
 
     def get(self, session_id: str) -> Optional[Dict[str, Any]]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             row = conn.execute("SELECT payload FROM sessions WHERE id = ?", (session_id,)).fetchone()
         if not row:
             return None
@@ -81,7 +82,7 @@ class V2SessionStore:
     def save(self, session: Dict[str, Any]) -> Dict[str, Any]:
         session["updated_at"] = _utcnow()
         payload = json.dumps(session, ensure_ascii=False)
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 INSERT INTO sessions (id, title, created_at, updated_at, payload)
