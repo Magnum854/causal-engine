@@ -21,9 +21,8 @@ print("\n读取到的环境变量：")
 print("-" * 60)
 for key, value in env_vars.items():
     if value:
-        # 只显示前10个字符，保护隐私
-        masked_value = value[:10] + "..." if len(value) > 10 else value
-        print(f"✅ {key} = {masked_value}")
+        # Only report presence: even a prefix can disclose credential material.
+        print(f"✅ {key} = 已配置")
     else:
         print(f"❌ {key} = None (未配置)")
 
@@ -44,4 +43,22 @@ else:
         print("✅ 将使用 Serper API")
 
 print("=" * 60)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

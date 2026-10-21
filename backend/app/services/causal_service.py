@@ -9,7 +9,8 @@ class CausalService:
     def __init__(self):
         self.client = AsyncOpenAI(
             api_key=os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            timeout=60.0  # 60秒超时
         )
         self.model = os.getenv("OPENAI_MODEL", "deepseek-reasoner")
     

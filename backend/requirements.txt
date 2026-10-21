@@ -1,12 +1,28 @@
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-pydantic==2.5.3
-pydantic-settings==2.1.0
-python-dotenv==1.0.0
-openai==1.54.0
-httpx==0.27.0
-python-multipart==0.0.6
-aiohttp==3.9.1
-duckduckgo-search==4.1.0
-yfinance==0.2.40
+# 核心框架
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# 数据验证（使用预编译版本，避免 Rust 编译问题）
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# 环境变量
+python-dotenv>=1.0.0
+
+# AI 服务
+openai>=1.54.0
+
+# HTTP 客户端
+httpx>=0.27.0
+aiohttp>=3.9.0
+
+# 文件上传
+python-multipart>=0.0.6
+
+# 搜索和数据服务
+duckduckgo-search>=4.1.0
+yfinance>=0.2.40
+
+# 注意：如果遇到 pydantic-core 编译错误，请使用以下命令安装预编译版本：
+# pip install --only-binary :all: pydantic
 

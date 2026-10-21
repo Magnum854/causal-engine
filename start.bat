@@ -54,7 +54,7 @@ if not exist "backend\.env" (
     echo [Warning] Creating default .env file...
     (
         echo # DeepSeek API Config
-        echo OPENAI_API_KEY=sk-808aa93c9409413bbfcf66505a96de94
+        echo OPENAI_API_KEY=your_api_key_here
         echo OPENAI_BASE_URL=https://api.deepseek.com/v1
         echo OPENAI_MODEL=deepseek-chat
         echo.

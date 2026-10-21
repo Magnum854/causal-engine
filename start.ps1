@@ -49,7 +49,7 @@ if (-not (Test-Path "backend\.env")) {
     Write-Host "[Warning] Creating default .env file..." -ForegroundColor Yellow
     $envContent = @"
 # DeepSeek API Config
-OPENAI_API_KEY=sk-808aa93c9409413bbfcf66505a96de94
+OPENAI_API_KEY=your_api_key_here
 OPENAI_BASE_URL=https://api.deepseek.com/v1
 OPENAI_MODEL=deepseek-chat
 

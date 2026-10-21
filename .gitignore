@@ -2,10 +2,14 @@
 .env
 .env.local
 .env.*.local
+.env.*
+!.env.example
+!.env.*.example
 
 # 依赖
 node_modules/
 venv/
+.venv/
 __pycache__/
 
 # 构建产物
@@ -14,6 +18,12 @@ build/
 
 # 日志
 *.log
+
+# Local runtime state
+backend/data/
+
+# Local credential scratch files
+/.txt
 
 # 系统文件
 .DS_Store

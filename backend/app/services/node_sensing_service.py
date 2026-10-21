@@ -19,6 +19,9 @@ from urllib.parse import urlparse
 from pathlib import Path
 import logging
 
+# 导入置信度计算器
+from app.utils.confidence_calculator import calculate_node_confidence
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -32,8 +35,9 @@ class NodeSensingService:
     
     def __init__(self):
         self.client = AsyncOpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+            api_key=os.getenv("OPENAI_API_KEY") or "missing-key",
+            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            timeout=60.0  # 60秒超时
         )
         self.model = os.getenv("OPENAI_MODEL", "deepseek-reasoner")
         
@@ -45,23 +49,70 @@ class NodeSensingService:
         self.serper_api_key = os.getenv("SERPER_API_KEY")
         self.serper_base_url = "https://google.serper.dev/search"
         
-        # 并发控制
-        self.max_concurrent_searches = 5
+        # 并发控制（优化：提高并发数）
+        self.max_concurrent_searches = 10
+        self.search_timeout_seconds = 15
+        self.search_retry_attempts = 3
+        self._search_cache: Dict[str, tuple] = {}
+        self._search_cache_ttl_seconds = 15 * 60
         
         # 加载白名单配置
         self._load_whitelist_config()
     
+    def _is_qualitative_node(self, node_type: str) -> bool:
+        """
+        判断节点是否为定性类型
+        
+        Args:
+            node_type: 节点类型
+            
+        Returns:
+            True 表示定性节点，False 表示定量节点
+        """
+        if not node_type:
+            return False
+        
+        # 检查是否在定性类型集合中
+        if node_type in self.qualitative_types:
+            return True
+        
+        # 检查是否在定量类型集合中
+        if node_type in self.quantitative_types:
+            return False
+        
+        # 默认：未知类型视为定量（保守策略）
+        logger.warning(f"[节点分类] 未知节点类型: {node_type}，默认视为定量型")
+        return False
+    
+    def _get_intensity_scale(self, node_type: str) -> str:
+        """
+        获取定性节点的强度等级类型
+        
+        Args:
+            node_type: 节点类型
+            
+        Returns:
+            强度等级类型: risk_based, sentiment_based, trend_based, expectation_based
+        """
+        routing_rules = self.config.get("routing_rules", {})
+        rule = routing_rules.get(node_type, {})
+        
+        # 从路由规则中获取强度等级类型
+        intensity_scale = rule.get("intensity_scale", "risk_based")
+        
+        return intensity_scale
+    
     def _load_whitelist_config(self):
-        """加载白名单域名配置"""
+        """加载白名单域名配置和节点类型分类"""
         config_path = Path(__file__).parent.parent.parent / "config" / "financial_sources.json"
         
         try:
             with open(config_path, "r", encoding="utf-8") as f:
-                config = json.load(f)
+                self.config = json.load(f)
             
             # 提取所有白名单域名
             self.whitelist_domains = []
-            search_domains = config.get("search_domains", {})
+            search_domains = self.config.get("search_domains", {})
             
             for category_name, category_data in search_domains.items():
                 if category_name == "description":
@@ -69,15 +120,25 @@ class NodeSensingService:
                 if isinstance(category_data, dict) and "domains" in category_data:
                     self.whitelist_domains.extend(category_data["domains"])
             
+            # 加载节点类型分类
+            node_categories = self.config.get("node_type_categories", {})
+            self.quantitative_types = set(node_categories.get("quantitative", {}).get("types", []))
+            self.qualitative_types = set(node_categories.get("qualitative", {}).get("types", []))
+            self.intensity_levels = node_categories.get("qualitative", {}).get("intensity_levels", {})
+            
             logger.info(f"[白名单配置] 加载完成，共 {len(self.whitelist_domains)} 个权威域名")
+            logger.info(f"[节点分类] 定量型: {len(self.quantitative_types)} 种，定性型: {len(self.qualitative_types)} 种")
             
         except Exception as e:
             logger.error(f"[白名单配置] 加载失败: {str(e)}")
             self.whitelist_domains = []
+            self.quantitative_types = set()
+            self.qualitative_types = set()
+            self.intensity_levels = {}
         
     async def enrich_node_state(self, node_json: Dict[str, Any]) -> Dict[str, Any]:
         """
-        为单个节点补充实时状态信息（两阶段共识验证版本）
+        为单个节点补充实时状态信息（优化版：保留两阶段但加速）
         
         Args:
             node_json: 节点对象，包含 sensing_config.auto_queries
@@ -85,22 +146,20 @@ class NodeSensingService:
         Returns:
             更新后的节点对象，包含 current_state 字段
             
-        【两阶段数据流】：
-            Stage 1: 白名单优先搜索 (Whitelist Pass)
-                - 限定权威域名搜索（7天窗口）
-                - LLM 直接提取数值
-                - 成功 → 标记 confidence: "whitelist_direct"
-                
-            Stage 2: 全网兜底与三方交叉验证 (Cross-Validation Pass)
-                - 全网搜索（不限域名，7天窗口）
-                - LLM 严格执行三方交叉验证
-                - 必须 ≥3 个独立域名一致才采信
-                - 成功 → 标记 confidence: "cross_validated"
+        【优化策略】：
+            - Stage 1: 白名单搜索（快速路径）
+            - Stage 2: 全网搜索但简化验证（保证数据可用性）
+            - 优化点：减少搜索结果数、简化 LLM Prompt、提高并发
         """
         node_id = node_json.get("id", "unknown")
         node_label = node_json.get("label", "unknown")
+        node_type = node_json.get("type", "")
         
-        logger.info(f"[节点感知 2.0] 开始处理节点: {node_id} ({node_label})")
+        # 判断节点类型（定量 vs 定性）
+        is_qualitative = self._is_qualitative_node(node_type)
+        node_category = "定性" if is_qualitative else "定量"
+        
+        logger.info(f"[节点感知] 处理: {node_label} ({node_category})")
         
         try:
             # 1. 提取搜索查询配置
@@ -108,81 +167,80 @@ class NodeSensingService:
             auto_queries = sensing_config.get("auto_queries", [])
             
             if not auto_queries:
-                logger.warning(f"[节点感知] 节点 {node_id} 缺少 auto_queries 配置，跳过")
+                logger.warning(f"[节点感知] 节点 {node_id} 缺少查询配置")
                 return node_json
-            
-            logger.info(f"[节点感知] 节点 {node_id} 配置了 {len(auto_queries)} 个搜索查询")
             
             # ============================================================
             # Stage 1: 白名单优先搜索
             # ============================================================
-            logger.info(f"[Stage 1] 白名单优先搜索 - 节点: {node_label}")
-            
-            stage1_results = await self._perform_searches(auto_queries)
+            stage1_results = await self._perform_searches(auto_queries, max_results=3)
             
             if stage1_results:
-                # 白名单过滤
                 whitelist_results = self._filter_by_whitelist(stage1_results)
                 
-                logger.info(
-                    f"[Stage 1] 搜索结果: {len(stage1_results)} 条 "
-                    f"→ 白名单过滤后: {len(whitelist_results)} 条"
-                )
-                
                 if whitelist_results:
-                    # LLM 直接提取（无需交叉验证）
-                    current_state = await self._extract_state_stage1(
-                        node_label=node_label,
-                        search_results=whitelist_results
-                    )
+                    # 根据节点类型选择提取方法
+                    if is_qualitative:
+                        current_state = await self._extract_qualitative_state_stage1(
+                            node_label=node_label,
+                            node_type=node_type,
+                            search_results=whitelist_results
+                        )
+                    else:
+                        current_state = await self._extract_quantitative_state_stage1(
+                            node_label=node_label,
+                            search_results=whitelist_results
+                        )
                     
                     if current_state["value"] != "unknown":
-                        logger.info(
-                            f"[Stage 1] ✓ 白名单直接采信: {current_state['value']} "
-                            f"(confidence: whitelist_direct)"
-                        )
+                        # 计算置信度分数
+                        llm_confidence = node_json.get("confidence", 0.8)
+                        sources = current_state.get("sources", [])
+                        confidence_result = calculate_node_confidence(sources, llm_confidence)
                         
-                        # 注入状态
+                        current_state["confidence_score"] = confidence_result["final_score"]
+                        current_state["confidence_dimensions"] = confidence_result["dimensions"]
+                        current_state["confidence_rating"] = confidence_result["rating"]
+                        
                         node_json["current_state"] = current_state
                         node_json["last_updated"] = datetime.utcnow().isoformat()
                         return node_json
-                    else:
-                        logger.warning(f"[Stage 1] LLM 返回 unknown，进入 Stage 2")
-                else:
-                    logger.warning(f"[Stage 1] 白名单过滤后无结果，进入 Stage 2")
-            else:
-                logger.warning(f"[Stage 1] 搜索无结果，进入 Stage 2")
             
             # ============================================================
-            # Stage 2: 全网兜底与三方交叉验证
+            # Stage 2: 全网搜索（简化版，保证数据可用性）
             # ============================================================
-            logger.info(f"[Stage 2] 全网搜索 + 三方交叉验证 - 节点: {node_label}")
+            logger.info(f"[Stage 2] 全网搜索: {node_label}")
             
-            # 重新搜索（全网，Top-10）
-            stage2_results = await self._perform_searches(auto_queries, max_results=10)
+            # 全网搜索（减少结果数：10 → 5）
+            stage2_results = await self._perform_searches(auto_queries, max_results=5)
             
             if not stage2_results:
-                logger.error(f"[Stage 2] 全网搜索无结果，返回 unknown")
+                logger.warning(f"[Stage 2] 无搜索结果")
                 node_json["current_state"] = self._create_unknown_state()
                 return node_json
             
-            logger.info(f"[Stage 2] 全网搜索结果: {len(stage2_results)} 条")
-            
-            # LLM 三方交叉验证
-            current_state = await self._extract_state_stage2(
-                node_label=node_label,
-                search_results=stage2_results
-            )
-            
-            if current_state["value"] != "unknown":
-                logger.info(
-                    f"[Stage 2] ✓ 三方交叉验证通过: {current_state['value']} "
-                    f"(confidence: cross_validated, sources: {len(current_state.get('sources', []))})"
+            # 简化提取（不要求严格的三方验证）
+            if is_qualitative:
+                current_state = await self._extract_qualitative_state_simple(
+                    node_label=node_label,
+                    node_type=node_type,
+                    search_results=stage2_results
                 )
             else:
-                logger.warning(f"[Stage 2] ✗ 三方交叉验证失败，返回 unknown")
+                current_state = await self._extract_quantitative_state_simple(
+                    node_label=node_label,
+                    search_results=stage2_results
+                )
             
-            # 注入状态
+            # 计算置信度分数
+            llm_confidence = node_json.get("confidence", 0.6)
+            sources = current_state.get("sources", [])
+            confidence_result = calculate_node_confidence(sources, llm_confidence)
+            
+            current_state["confidence_score"] = confidence_result["final_score"]
+            current_state["confidence_dimensions"] = confidence_result["dimensions"]
+            current_state["confidence_rating"] = confidence_result["rating"]
+            
             node_json["current_state"] = current_state
             node_json["last_updated"] = datetime.utcnow().isoformat()
             
@@ -190,7 +248,6 @@ class NodeSensingService:
             
         except Exception as e:
             logger.error(f"[节点感知] 节点 {node_id} 处理失败: {str(e)}")
-            # 降级处理：返回 unknown 状态
             node_json["current_state"] = self._create_unknown_state()
             return node_json
     
@@ -291,12 +348,14 @@ class NodeSensingService:
             except Exception as e:
                 logger.error(f"[搜索引擎] Serper 搜索也失败: {str(e)}")
         
-        logger.error(f"[搜索引擎] 所有搜索引擎均不可用")
+        # 最终降级：返回空结果（避免卡住）
+        logger.warning(f"[搜索引擎] 所有搜索引擎均不可用，返回空结果")
         return []
     
     async def _search_tavily(self, query: str, max_results: int = 3) -> List[Dict[str, Any]]:
         """调用 Tavily API"""
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=5)  # 5秒超时（优化：减少等待时间）
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             payload = {
                 "api_key": self.tavily_api_key,
                 "query": query,
@@ -324,7 +383,8 @@ class NodeSensingService:
     
     async def _search_serper(self, query: str, max_results: int = 3) -> List[Dict[str, Any]]:
         """调用 Serper API"""
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=5)  # 5秒超时（优化：减少等待时间）
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             headers = {
                 "X-API-KEY": self.serper_api_key,
                 "Content-Type": "application/json"
@@ -384,13 +444,140 @@ class NodeSensingService:
         
         return filtered
     
-    async def _extract_state_stage1(
+    def _score_domain(self, domain: str) -> float:
+        normalized = (domain or "").lower().replace("www.", "")
+        source_scores = {
+            "bloomberg.com": 0.95,
+            "reuters.com": 0.95,
+            "federalreserve.gov": 0.98,
+            "fred.stlouisfed.org": 0.98,
+            "ecb.europa.eu": 0.95,
+            "imf.org": 0.95,
+            "worldbank.org": 0.93,
+            "ft.com": 0.88,
+            "cnbc.com": 0.8,
+            "wallstreetcn.com": 0.8,
+            "investing.com": 0.75,
+            "marketwatch.com": 0.74,
+            "seekingalpha.com": 0.6,
+            "medium.com": 0.4,
+        }
+        for suffix, score in source_scores.items():
+            if normalized == suffix or normalized.endswith(f".{suffix}"):
+                return score
+        if normalized.endswith(".gov"):
+            return 0.9
+        if normalized.endswith(".edu"):
+            return 0.75
+        return 0.3
+
+    def _score_search_results(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        scored = []
+        for result in results:
+            domain = result.get("domain") or urlparse(result.get("url", "")).netloc
+            result["domain"] = domain
+            result["source_quality_score"] = self._score_domain(domain)
+            scored.append(result)
+        return sorted(scored, key=lambda item: item.get("source_quality_score", 0.0), reverse=True)
+
+    async def _search_single_query(self, query: str, max_results: int = 3) -> List[Dict[str, Any]]:
+        cache_key = f"{query}:{max_results}"
+        cached = self._search_cache.get(cache_key)
+        if cached:
+            cached_at, cached_results = cached
+            if (datetime.utcnow() - cached_at).total_seconds() < self._search_cache_ttl_seconds:
+                logger.info(f"[搜索缓存] 命中: {query}")
+                return cached_results
+
+        async def run_with_retries(provider_name, call):
+            last_error = None
+            for attempt in range(1, self.search_retry_attempts + 1):
+                try:
+                    results = await call()
+                    scored_results = self._score_search_results(results)
+                    self._search_cache[cache_key] = (datetime.utcnow(), scored_results)
+                    return scored_results
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"[搜索重试] {provider_name} 第 {attempt} 次失败: {str(e)}")
+                    if attempt < self.search_retry_attempts:
+                        await asyncio.sleep(min(2 ** (attempt - 1), 4))
+            raise last_error
+
+        if self.tavily_api_key:
+            try:
+                return await run_with_retries("Tavily", lambda: self._search_tavily(query, max_results))
+            except Exception as e:
+                logger.warning(f"[搜索引擎] Tavily 失败，尝试 Serper: {str(e)}")
+
+        if self.serper_api_key:
+            try:
+                return await run_with_retries("Serper", lambda: self._search_serper(query, max_results))
+            except Exception as e:
+                logger.error(f"[搜索引擎] Serper 失败: {str(e)}")
+
+        return []
+
+    async def _search_tavily(self, query: str, max_results: int = 3) -> List[Dict[str, Any]]:
+        timeout = aiohttp.ClientTimeout(total=self.search_timeout_seconds)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            payload = {
+                "api_key": self.tavily_api_key,
+                "query": query,
+                "search_depth": "basic",
+                "max_results": min(max_results, 15),
+            }
+            async with session.post(self.tavily_base_url, json=payload) as resp:
+                if resp.status != 200:
+                    raise Exception(f"Tavily API returned {resp.status}")
+                data = await resp.json()
+                return [
+                    {
+                        "title": r.get("title", ""),
+                        "snippet": r.get("content", ""),
+                        "url": r.get("url", ""),
+                        "domain": urlparse(r.get("url", "")).netloc,
+                    }
+                    for r in data.get("results", [])
+                ]
+
+    async def _search_serper(self, query: str, max_results: int = 3) -> List[Dict[str, Any]]:
+        timeout = aiohttp.ClientTimeout(total=self.search_timeout_seconds)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            headers = {"X-API-KEY": self.serper_api_key, "Content-Type": "application/json"}
+            payload = {"q": query, "num": min(max_results, 15)}
+            async with session.post(self.serper_base_url, json=payload, headers=headers) as resp:
+                if resp.status != 200:
+                    raise Exception(f"Serper API returned {resp.status}")
+                data = await resp.json()
+                return [
+                    {
+                        "title": r.get("title", ""),
+                        "snippet": r.get("snippet", ""),
+                        "url": r.get("link", ""),
+                        "domain": urlparse(r.get("link", "")).netloc,
+                    }
+                    for r in data.get("organic", [])
+                ]
+
+    def _filter_by_whitelist(self, search_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        scored = self._score_search_results(search_results)
+        if not self.whitelist_domains:
+            return scored
+        for result in scored:
+            result["matched_whitelist"] = any(
+                result.get("domain", "").endswith(domain) or result.get("domain", "") == domain
+                for domain in self.whitelist_domains
+            )
+        return scored
+
+    async def _extract_quantitative_state_stage1(
         self, 
         node_label: str, 
         search_results: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
-        Stage 1: 白名单直接提取（无需交叉验证）
+        Stage 1: 白名单直接提取（定量节点 - 提取具体数值）
         
         Args:
             node_label: 节点标签（如"美联储利率"）
@@ -399,57 +586,30 @@ class NodeSensingService:
         Returns:
             结构化状态对象: {value, trend, narrative_context, confidence, sources}
         """
-        logger.info(f"[Stage 1 LLM] 开始解析节点 '{node_label}' 的状态（白名单直接提取）")
+        logger.info(f"[Stage 1 定量] 开始解析节点 '{node_label}' 的状态（白名单直接提取）")
         
         # 构建上下文
         context = self._build_search_context(search_results)
         
         # Stage 1 系统提示词：直接提取，信任白名单
-        system_prompt = """你是一个专业的金融数据提取引擎。你正在处理来自【权威白名单域名】的搜索结果（如 Bloomberg、Reuters、IMF、东方财富等）。
+        system_prompt = """你是一个专业的金融数据提取引擎。从权威来源快速提取关键数据。
 
-【输出格式】
-必须严格输出以下 JSON 格式：
+【输出格式】JSON：
 {
-    "value": "具体数值或状态描述",
+    "value": "具体数值或状态",
     "trend": "rising|falling|stable",
-    "narrative_context": "一句话总结当前状态的背景原因",
+    "narrative_context": "一句话背景",
+    "data_release_time": "YYYY年MM月DD日",
     "confidence": "whitelist_direct",
-    "sources": [
-        {
-            "title": "新闻标题",
-            "url": "完整URL",
-            "domain": "域名"
-        }
-    ]
+    "sources": [{"title": "标题", "url": "URL", "domain": "域名"}]
 }
 
-【关键约束】
-1. value 字段：
-   - 如果搜索结果中有明确数值，必须提取（如 "5.25%", "1850美元/盎司", "7.2%"）
-   - 如果没有明确数值，用简短描述（如 "持续上涨", "保持稳定"）
-   - 如果完全无法确定，必须设为 "unknown"
-
-2. trend 字段：
-   - 只能是 "rising"（上升）、"falling"（下降）、"stable"（稳定）三者之一
-   - 基于搜索结果中的趋势词判断
-
-3. sources 字段：
-   - 列出所有支持该数值的搜索结果（最多3条）
-   - 必须包含 title、url、domain 三个字段
-
-4. confidence 字段：
-   - 固定为 "whitelist_direct"（表示来自白名单直接采信）
-
-【反幻觉机制】
-- 这些是权威来源，可以直接采信
-- 但如果搜索结果不足以判断状态，所有字段设为保守值：
-{
-    "value": "unknown",
-    "trend": "stable",
-    "narrative_context": "暂无足够信息判断当前状态",
-    "confidence": "whitelist_direct",
-    "sources": []
-}"""
+【规则】
+1. value: 提取数值（如"5.25%"）或简短描述，无法确定则"unknown"
+2. data_release_time: 提取数据发布时间（如"2024年12月18日"），无则"未知"
+3. trend: rising/falling/stable
+4. sources: 最多3条，包含title/url/domain
+5. 信息不足时返回unknown"""
 
         user_prompt = f"""【节点名称】
 {node_label}
@@ -460,7 +620,7 @@ class NodeSensingService:
 请提取该节点的实时状态，严格按照 JSON 格式输出。"""
 
         try:
-            # 调用 LLM
+            # 调用 LLM（优化：降低max_tokens加速）
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -468,6 +628,7 @@ class NodeSensingService:
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.1,
+                max_tokens=500,  # 限制输出长度，加快响应
                 response_format={"type": "json_object"}
             )
             
@@ -475,7 +636,7 @@ class NodeSensingService:
             state = json.loads(content)
             
             # 验证必需字段
-            required_fields = ["value", "trend", "narrative_context", "confidence", "sources"]
+            required_fields = ["value", "trend", "narrative_context", "data_release_time", "confidence", "sources"]
             for field in required_fields:
                 if field not in state:
                     raise ValueError(f"LLM 返回缺少字段: {field}")
@@ -483,134 +644,90 @@ class NodeSensingService:
             # 验证 trend 枚举值
             valid_trends = ["rising", "falling", "stable"]
             if state["trend"] not in valid_trends:
-                logger.warning(f"[Stage 1 LLM] trend 值无效: {state['trend']}，修正为 stable")
+                logger.warning(f"[Stage 1 定量] trend 值无效: {state['trend']}，修正为 stable")
                 state["trend"] = "stable"
             
             logger.info(
-                f"[Stage 1 LLM] 节点 '{node_label}' 解析成功: "
-                f"value={state['value']}, sources={len(state.get('sources', []))}"
+                f"[Stage 1 定量] 节点 '{node_label}' 解析成功: "
+                f"value={state['value']}, data_release_time={state.get('data_release_time', '未知')}, "
+                f"sources={len(state.get('sources', []))}"
             )
             
             return state
             
         except Exception as e:
-            logger.error(f"[Stage 1 LLM] 节点 '{node_label}' 解析失败: {str(e)}")
+            logger.error(f"[Stage 1 定量] 节点 '{node_label}' 解析失败: {str(e)}")
             return self._create_unknown_state(confidence="whitelist_direct")
     
-    async def _extract_state_stage2(
+    async def _extract_qualitative_state_stage1(
         self, 
-        node_label: str, 
+        node_label: str,
+        node_type: str,
         search_results: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
-        Stage 2: 全网搜索 + 三方交叉验证（核心难点）
+        Stage 1: 白名单直接提取（定性节点 - 提取情绪/风险等级）
         
         Args:
-            node_label: 节点标签
-            search_results: 全网搜索结果（Top-10）
+            node_label: 节点标签（如"地缘政治风险"）
+            node_type: 节点类型（用于确定强度等级类型）
+            search_results: 白名单过滤后的搜索结果
             
         Returns:
-            结构化状态对象: {value, trend, narrative_context, confidence, sources}
-            
-        【三方交叉验证规则】：
-            1. 提取的数值必须在至少 3 个不同域名的网页中完全一致
-            2. sources 数组必须严格列出这 3 个支持该数值的独立网页
-            3. 如果满足该数值的独立域名少于 3 个，返回 unknown
+            结构化状态对象: {value, intensity, key_events, trend, narrative_context, confidence, sources}
         """
-        logger.info(f"[Stage 2 LLM] 开始解析节点 '{node_label}' 的状态（三方交叉验证）")
+        logger.info(f"[Stage 1 定性] 开始解析节点 '{node_label}' 的状态（白名单直接提取）")
         
-        # 构建上下文（包含域名信息）
-        context = self._build_search_context_with_domains(search_results)
+        # 获取强度等级类型
+        intensity_scale = self._get_intensity_scale(node_type)
+        intensity_options = self.intensity_levels.get(intensity_scale, self.intensity_levels.get("risk_based", []))
         
-        # Stage 2 系统提示词：严格的三方交叉验证
-        system_prompt = """你是一个严苛的金融审计员。面对这批全网搜索结果，你必须进行【三方交叉验证 (Cross-Validation)】以消除虚假信息。
+        # 构建上下文
+        context = self._build_search_context(search_results)
+        
+        # Stage 1 定性节点系统提示词
+        system_prompt = f"""你是金融情绪分析引擎。从权威来源快速提取风险/情绪状态。
 
-【输出格式】
-必须严格输出以下 JSON 格式：
-{
-    "value": "具体数值或状态描述",
+【输出格式】JSON：
+{{
+    "value": "强度等级（从{intensity_options}中选择）",
+    "intensity": 0.75,
+    "key_events": ["事件1", "事件2"],
     "trend": "rising|falling|stable",
-    "narrative_context": "一句话总结当前状态的背景原因",
-    "confidence": "cross_validated",
-    "sources": [
-        {
-            "title": "新闻标题1",
-            "url": "完整URL1",
-            "domain": "域名1"
-        },
-        {
-            "title": "新闻标题2",
-            "url": "完整URL2",
-            "domain": "域名2"
-        },
-        {
-            "title": "新闻标题3",
-            "url": "完整URL3",
-            "domain": "域名3"
-        }
-    ]
-}
+    "narrative_context": "一句话背景",
+    "confidence": "whitelist_direct",
+    "sources": [{{"title": "标题", "url": "URL", "domain": "域名"}}]
+}}
 
-【三方交叉验证规则（严格执行）】
-规则 1：你提取的最新数值，必须在至少 3 个不同域名的网页摘要中完全一致地出现过。
-   - 例如：如果你提取 "5.25%"，那么必须有 3 个不同域名的网页都明确提到 "5.25%"
-   - 不同域名是指：bloomberg.com、reuters.com、cnbc.com 算 3 个不同域名
-   - 同一域名的多个页面只算 1 个域名
-
-规则 2：请在 JSON 输出的 sources 数组中，严格列出这 3 个支持该数值的独立网页。
-   - sources 数组必须包含至少 3 条记录
-   - 每条记录必须包含 title、url、domain 三个字段
-   - 这 3 条记录的 domain 必须完全不同
-
-规则 3：如果满足该数值的独立域名少于 3 个，即使你看到了数据，也必须返回 unknown。
-   - 例如：只有 2 个域名提到 "5.25%"，其他域名没有提到或提到不同数值 → 返回 unknown
-   - 例如：10 个搜索结果都来自同一个域名 → 返回 unknown
-
-【反幻觉机制】
-- 全网搜索结果可能包含虚假信息、过时数据、营销内容
-- 只有通过三方交叉验证的数据才能采信
-- 如果无法满足三方验证，必须返回：
-{
-    "value": "unknown",
-    "trend": "stable",
-    "narrative_context": "无法通过三方交叉验证，数据源不足或存在冲突",
-    "confidence": "cross_validated",
-    "sources": []
-}
-
-【示例】
-假设搜索结果：
-- [结果 1] bloomberg.com: "美联储利率维持在 5.25%"
-- [结果 2] reuters.com: "Fed rate remains at 5.25%"
-- [结果 3] cnbc.com: "联邦基金利率 5.25%"
-- [结果 4] randomsite.com: "利率可能是 5.5%"（冲突数据，忽略）
-
-✓ 正确输出：value="5.25%"，sources 包含前 3 个结果（3 个不同域名一致）
-
-假设搜索结果：
-- [结果 1] bloomberg.com: "美联储利率维持在 5.25%"
-- [结果 2] bloomberg.com: "Fed rate 5.25%"（同域名，不计入）
-- [结果 3] reuters.com: "利率可能在 5.0%-5.5% 之间"（不明确，不计入）
-
-✗ 正确输出：value="unknown"（只有 1 个域名明确提到 5.25%，不满足三方验证）"""
+【规则】
+1. value: 从{intensity_options}选择，无法确定则"unknown"
+2. intensity: 0.0-1.0评分
+3. key_events: 1-3个关键事件（10-20字）
+4. trend: rising/falling/stable
+5. sources: 最多3条
+6. 信息不足时返回unknown"""
 
         user_prompt = f"""【节点名称】
 {node_label}
 
-【搜索结果（全网，需要三方交叉验证）】
+【节点类型】
+{node_type}
+
+【搜索结果（来自权威白名单域名）】
 {context}
 
-请严格执行三方交叉验证规则，提取该节点的实时状态。如果无法满足三方验证，必须返回 unknown。"""
+请分析该定性节点的当前状态，严格按照 JSON 格式输出。"""
 
         try:
-            # 调用 LLM
+            # 调用 LLM（优化：降低max_tokens加速）
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.0,  # 零温度，最大化确定性
+                temperature=0.2,
+                max_tokens=500,  # 限制输出长度，加快响应
                 response_format={"type": "json_object"}
             )
             
@@ -618,49 +735,226 @@ class NodeSensingService:
             state = json.loads(content)
             
             # 验证必需字段
-            required_fields = ["value", "trend", "narrative_context", "confidence", "sources"]
+            required_fields = ["value", "intensity", "key_events", "trend", "narrative_context", "confidence", "sources"]
             for field in required_fields:
                 if field not in state:
                     raise ValueError(f"LLM 返回缺少字段: {field}")
             
-            # 验证三方交叉验证规则
-            if state["value"] != "unknown":
-                sources = state.get("sources", [])
-                
-                # 检查是否有至少 3 个不同域名
-                unique_domains = set()
-                for source in sources:
-                    domain = source.get("domain", "")
-                    if domain:
-                        unique_domains.add(domain)
-                
-                if len(unique_domains) < 3:
-                    logger.warning(
-                        f"[Stage 2 LLM] 三方验证失败: 只有 {len(unique_domains)} 个独立域名，"
-                        f"不满足 ≥3 的要求，强制返回 unknown"
-                    )
-                    return self._create_unknown_state(
-                        confidence="cross_validated",
-                        narrative="无法通过三方交叉验证，数据源不足或存在冲突"
-                    )
+            # 验证 intensity 范围
+            if not (0.0 <= state["intensity"] <= 1.0):
+                logger.warning(f"[Stage 1 定性] intensity 值超出范围: {state['intensity']}，修正为 0.5")
+                state["intensity"] = 0.5
             
             # 验证 trend 枚举值
             valid_trends = ["rising", "falling", "stable"]
             if state["trend"] not in valid_trends:
-                logger.warning(f"[Stage 2 LLM] trend 值无效: {state['trend']}，修正为 stable")
+                logger.warning(f"[Stage 1 定性] trend 值无效: {state['trend']}，修正为 stable")
                 state["trend"] = "stable"
             
             logger.info(
-                f"[Stage 2 LLM] 节点 '{node_label}' 解析成功: "
-                f"value={state['value']}, sources={len(state.get('sources', []))} "
-                f"(unique_domains={len(set(s.get('domain', '') for s in state.get('sources', [])))})"
+                f"[Stage 1 定性] 节点 '{node_label}' 解析成功: "
+                f"value={state['value']}, intensity={state['intensity']}, "
+                f"key_events={len(state.get('key_events', []))}"
             )
             
             return state
             
         except Exception as e:
-            logger.error(f"[Stage 2 LLM] 节点 '{node_label}' 解析失败: {str(e)}")
-            return self._create_unknown_state(confidence="cross_validated")
+            logger.error(f"[Stage 1 定性] 节点 '{node_label}' 解析失败: {str(e)}")
+            return self._create_unknown_state(confidence="whitelist_direct", intensity=0.5)
+    
+    async def _extract_quantitative_state_simple(
+        self, 
+        node_label: str, 
+        search_results: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        简化版全网提取（定量节点）- 不要求严格三方验证
+        
+        Args:
+            node_label: 节点标签
+            search_results: 全网搜索结果
+            
+        Returns:
+            结构化状态对象: {value, trend, narrative_context, confidence, sources}
+        """
+        logger.info(f"[简化提取] 定量节点: {node_label}")
+        
+        # 构建上下文
+        context = self._build_search_context(search_results)
+        
+        # 简化版系统提示词（不要求严格验证）
+        system_prompt = """你是金融数据提取专家。从搜索结果中提取最新数据。
+
+【输出格式】JSON：
+{
+    "value": "具体数值或状态",
+    "trend": "rising|falling|stable",
+    "narrative_context": "一句话背景",
+    "data_release_time": "YYYY年MM月DD日",
+    "confidence": "web_search",
+    "sources": [{"title": "标题", "url": "URL", "domain": "域名"}]
+}
+
+【规则】
+1. value: 提取最常见的数值，无法确定则"unknown"
+2. data_release_time: 提取发布时间，无则"未知"
+3. trend: rising/falling/stable
+4. sources: 列出1-3个支持该数值的来源
+5. 优先选择权威来源（bloomberg/reuters/cnbc等）"""
+
+        user_prompt = f"""【节点】{node_label}
+
+【搜索结果】
+{context}
+
+提取最新状态。"""
+
+        try:
+            # 调用 LLM（优化：降低max_tokens加速）
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=500,
+                response_format={"type": "json_object"}
+            )
+            
+            content = response.choices[0].message.content
+            
+            # 尝试解析JSON，如果失败则记录详细信息
+            try:
+                state = json.loads(content)
+            except json.JSONDecodeError as json_err:
+                logger.error(f"[简化提取] 定量节点 '{node_label}' JSON解析失败: {json_err}")
+                logger.debug(f"[简化提取] LLM返回内容: {content[:500]}")  # 只记录前500字符
+                return self._create_unknown_state(confidence="web_search")
+            
+            # 验证必需字段
+            required_fields = ["value", "trend", "narrative_context", "data_release_time", "confidence", "sources"]
+            for field in required_fields:
+                if field not in state:
+                    logger.warning(f"[简化提取] 定量节点 '{node_label}' 缺少字段: {field}")
+                    raise ValueError(f"LLM 返回缺少字段: {field}")
+            
+            # 验证 trend 枚举值
+            valid_trends = ["rising", "falling", "stable"]
+            if state["trend"] not in valid_trends:
+                state["trend"] = "stable"
+            
+            logger.info(f"[简化提取] 定量节点 '{node_label}' 完成: value={state['value']}")
+            
+            return state
+            
+        except Exception as e:
+            logger.error(f"[简化提取] 定量节点 '{node_label}' 失败: {str(e)}")
+            return self._create_unknown_state(confidence="web_search")
+    
+    async def _extract_qualitative_state_simple(
+        self, 
+        node_label: str,
+        node_type: str,
+        search_results: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        简化版全网提取（定性节点）- 不要求严格多源验证
+        
+        Args:
+            node_label: 节点标签
+            node_type: 节点类型
+            search_results: 全网搜索结果
+            
+        Returns:
+            结构化状态对象: {value, intensity, key_events, trend, narrative_context, confidence, sources}
+        """
+        logger.info(f"[简化提取] 定性节点: {node_label}")
+        
+        # 获取强度等级类型
+        intensity_scale = self._get_intensity_scale(node_type)
+        intensity_options = self.intensity_levels.get(intensity_scale, self.intensity_levels.get("risk_based", []))
+        
+        # 构建上下文
+        context = self._build_search_context(search_results)
+        
+        # 简化版系统提示词（不要求严格验证）
+        system_prompt = f"""你是金融情绪分析专家。从搜索结果中提取风险/情绪状态。
+
+【输出格式】JSON：
+{{
+    "value": "强度等级（从{intensity_options}中选择）",
+    "intensity": 0.75,
+    "key_events": ["事件1", "事件2"],
+    "trend": "rising|falling|stable",
+    "narrative_context": "一句话背景",
+    "confidence": "web_search",
+    "sources": [{{"title": "标题", "url": "URL", "domain": "域名"}}]
+}}
+
+【规则】
+1. value: 从{intensity_options}选择最合适的等级
+2. intensity: 0.0-1.0评分
+3. key_events: 1-3个关键事件（10-20字）
+4. trend: rising/falling/stable
+5. sources: 列出1-3个来源
+6. 优先选择权威来源"""
+
+        user_prompt = f"""【节点】{node_label}
+【类型】{node_type}
+
+【搜索结果】
+{context}
+
+提取当前状态。"""
+
+        try:
+            # 调用 LLM（优化：降低max_tokens加速）
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.2,
+                max_tokens=500,
+                response_format={"type": "json_object"}
+            )
+            
+            content = response.choices[0].message.content
+            
+            # 尝试解析JSON，如果失败则记录详细信息
+            try:
+                state = json.loads(content)
+            except json.JSONDecodeError as json_err:
+                logger.error(f"[简化提取] 定性节点 '{node_label}' JSON解析失败: {json_err}")
+                logger.debug(f"[简化提取] LLM返回内容: {content[:500]}")  # 只记录前500字符
+                return self._create_unknown_state(confidence="web_search", intensity=0.5)
+            
+            # 验证必需字段
+            required_fields = ["value", "intensity", "key_events", "trend", "narrative_context", "confidence", "sources"]
+            for field in required_fields:
+                if field not in state:
+                    logger.warning(f"[简化提取] 定性节点 '{node_label}' 缺少字段: {field}")
+                    raise ValueError(f"LLM 返回缺少字段: {field}")
+            
+            # 验证 intensity 范围
+            if not (0.0 <= state["intensity"] <= 1.0):
+                state["intensity"] = 0.5
+            
+            # 验证 trend 枚举值
+            valid_trends = ["rising", "falling", "stable"]
+            if state["trend"] not in valid_trends:
+                state["trend"] = "stable"
+            
+            logger.info(f"[简化提取] 定性节点 '{node_label}' 完成: value={state['value']}")
+            
+            return state
+            
+        except Exception as e:
+            logger.error(f"[简化提取] 定性节点 '{node_label}' 失败: {str(e)}")
+            return self._create_unknown_state(confidence="web_search", intensity=0.5)
     
     def _build_search_context(self, search_results: List[Dict[str, Any]]) -> str:
         """将搜索结果格式化为 LLM 上下文（简化版）"""
@@ -699,14 +993,22 @@ class NodeSensingService:
     def _create_unknown_state(
         self, 
         confidence: str = "unknown", 
-        narrative: str = "暂无足够信息判断当前状态"
+        narrative: str = "暂无足够信息判断当前状态",
+        intensity: Optional[float] = None
     ) -> Dict[str, Any]:
         """创建 unknown 状态（降级方案）"""
-        return {
+        state = {
             "value": "unknown",
             "trend": "stable",
             "narrative_context": narrative,
+            "data_release_time": "未知",
             "confidence": confidence,
             "sources": []
         }
-
+        
+        # 如果是定性节点，添加 intensity 和 key_events 字段
+        if intensity is not None:
+            state["intensity"] = intensity
+            state["key_events"] = []
+        
+        return state

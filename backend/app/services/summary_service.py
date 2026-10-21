@@ -15,7 +15,8 @@ class SummaryGenerationService:
     def __init__(self):
         self.client = AsyncOpenAI(
             api_key=os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            timeout=60.0  # 60秒超时
         )
         # 使用更快的模型生成摘要
         self.simple_model = os.getenv("OPENAI_SUMMARY_MODEL", "deepseek-chat")

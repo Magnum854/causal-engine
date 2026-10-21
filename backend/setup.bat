@@ -18,7 +18,7 @@ echo 📝 创建 .env 配置文件...
 
 (
 echo # OpenAI API 配置（使用 DeepSeek^)
-echo OPENAI_API_KEY=sk-808aa93c9409413bbfcf66505a96de94
+echo OPENAI_API_KEY=your_api_key_here
 echo OPENAI_BASE_URL=https://api.deepseek.com/v1
 echo OPENAI_MODEL=deepseek-chat
 echo.
@@ -55,7 +55,7 @@ echo ✅ 配置完成！
 echo ================================
 echo.
 echo 📋 配置信息:
-echo    API Key: sk-808aa93c9409413bbfcf66505a96de94
+echo    API Key: your_api_key_here
 echo    Base URL: https://api.deepseek.com/v1
 echo    模型: deepseek-chat
 echo    搜索引擎: DuckDuckGo (免费)

@@ -16,72 +16,9 @@ from urllib.parse import urlparse
 
 from app.services.multi_tool_router_service import MultiToolRouterService
 from app.services.yahoo_finance_service import YahooFinanceService
+from app.services.search_service import SearchService
 
 logger = logging.getLogger(__name__)
-
-
-class SearchService:
-    """搜索引擎服务（用于新闻搜索）"""
-    
-    def __init__(self):
-        # 强制重新加载环境变量（解决热重载缓存问题）
-        from dotenv import load_dotenv
-        load_dotenv(override=True)
-        
-        self.tavily_api_key = os.getenv("TAVILY_API_KEY")
-        self.serper_api_key = os.getenv("SERPER_API_KEY")
-        self.use_mock = not (self.tavily_api_key or self.serper_api_key)
-        
-        if self.use_mock:
-            logger.warning("[搜索引擎] 未配置真实 API，将使用 Mock 模式")
-        else:
-            if self.tavily_api_key:
-                logger.info("[搜索引擎] ✅ 使用 Tavily API")
-            elif self.serper_api_key:
-                logger.info("[搜索引擎] ✅ 使用 Serper API")
-    
-    async def search(self, query: str) -> List[Dict[str, Any]]:
-        """执行搜索"""
-        if self.use_mock:
-            return await self._mock_search(query)
-        
-        if self.tavily_api_key:
-            return await self._tavily_search(query)
-        elif self.serper_api_key:
-            return await self._serper_search(query)
-        
-        return []
-    
-    async def _mock_search(self, query: str) -> List[Dict[str, Any]]:
-        """Mock 搜索"""
-        logger.info(f"[Mock Search] 模拟搜索: {query}")
-        await asyncio.sleep(0.5)
-        
-        mock_results = [
-            {
-                "title": f"{query} - 最新数据报告",
-                "url": "https://www.bloomberg.com/mock-article-1",
-                "snippet": f"根据最新数据显示，{query}呈现稳定趋势..."
-            },
-            {
-                "title": f"{query} - 市场分析",
-                "url": "https://www.reuters.com/mock-article-2",
-                "snippet": f"专家分析指出，{query}受多重因素影响..."
-            }
-        ]
-        
-        logger.info(f"[Mock Search] 返回 {len(mock_results)} 条模拟结果")
-        return mock_results
-    
-    async def _tavily_search(self, query: str) -> List[Dict[str, Any]]:
-        """Tavily 搜索"""
-        # TODO: 实现真实 Tavily API 调用
-        return await self._mock_search(query)
-    
-    async def _serper_search(self, query: str) -> List[Dict[str, Any]]:
-        """Serper 搜索"""
-        # TODO: 实现真实 Serper API 调用
-        return await self._mock_search(query)
 
 
 class TwoPassCausalService:
@@ -90,7 +27,8 @@ class TwoPassCausalService:
     def __init__(self):
         self.client = AsyncOpenAI(
             api_key=os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            timeout=60.0  # 60秒超时
         )
         self.model = os.getenv("OPENAI_MODEL", "deepseek-reasoner")
         
@@ -173,7 +111,8 @@ class TwoPassCausalService:
         {
             "id": "n1",
             "label": "节点标签（简短中文）",
-            "type": "cause|effect|intermediate",
+            "type": "节点数据类型（见下方类型列表）",
+            "causal_role": "cause|effect|intermediate",
             "description": "节点详细描述",
             "search_query": "用于搜索该节点最新状态的关键词"
         }
@@ -189,12 +128,39 @@ class TwoPassCausalService:
     "explanation": "整体因果关系的文字解释"
 }
 
+【节点数据类型列表】
+定量型（可提取具体数值）：
+- macro_indicator: 宏观经济指标（如GDP、CPI、失业率）
+- monetary_policy: 货币政策（如利率、准备金率）
+- stock_price: 股票价格
+- crypto_price: 加密货币价格
+- forex_rate: 外汇汇率
+- commodity_price: 大宗商品价格
+- interest_rate: 利率
+- inflation_rate: 通胀率
+
+定性型（需要情绪/事件分析）：
+- geopolitical_risk: 地缘政治风险
+- market_sentiment: 市场情绪
+- policy_expectation: 政策预期
+- regulatory_change: 监管变化
+- social_event: 社会事件
+- industry_trend: 行业趋势
+- consumer_confidence: 消费者信心
+- political_stability: 政治稳定性
+- trade_relations: 贸易关系
+
 【关键要求 - 节点标签规则】
 ⚠️ 重要：label 字段必须使用中文，这是显示给用户看的！
 - label: "铜价" ✅ 正确
 - label: "Copper Price" ❌ 错误
 - label: "经济增长" ✅ 正确  
 - label: "Economic Growth" ❌ 错误
+
+【关键要求 - 节点类型规则】
+1. type 字段：从上述类型列表中选择最合适的类型
+2. causal_role 字段：表示因果角色（cause/effect/intermediate）
+3. 为每个节点选择正确的数据类型，这决定了后续如何提取数据
 
 【关键要求 - Search Query 生成规则】
 1. search_query 必须是极简的 SEO 关键词，不要用完整句子
@@ -204,16 +170,23 @@ class TwoPassCausalService:
 
 【正确示例】
 节点 label: "美元指数" （中文）
+type: "forex_rate"
+causal_role: "cause"
 search_query: "US Dollar Index DXY current value 2026" （英文）
 
-节点 label: "美联储利率" （中文）
-search_query: "Federal Reserve interest rate current 2026" （英文）
+节点 label: "地缘政治风险" （中文）
+type: "geopolitical_risk"
+causal_role: "cause"
+search_query: "geopolitical risk middle east latest 2026" （英文）
 
 节点 label: "黄金价格" （中文）
+type: "commodity_price"
+causal_role: "effect"
 search_query: "gold price per ounce current 2026" （英文）
 
 【错误示例】
 ❌ label: "Copper Price" （应该用中文"铜价"）
+❌ type: "cause" （应该用数据类型如 "commodity_price"）
 ❌ search_query: "请帮我查询美元指数的最新走势和分析报告"（太冗长）
 ❌ search_query: "美元指数"（缺少时效性和数值关键词）
 """
@@ -362,6 +335,7 @@ search_query: "gold price per ounce current 2026" （英文）
             temp_node = {
                 "id": node_id,
                 "label": node_label,
+                "type": node_type,  # 传递节点类型，用于判断定量/定性
                 "sensing_config": {
                     "auto_queries": [search_query]
                 }

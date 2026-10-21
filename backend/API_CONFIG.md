@@ -20,7 +20,7 @@ touch .env  # Linux/Mac
 
 ```env
 # OpenAI API 配置（使用 DeepSeek）
-OPENAI_API_KEY=sk-808aa93c9409413bbfcf66505a96de94
+OPENAI_API_KEY=your_api_key_here
 OPENAI_BASE_URL=https://api.deepseek.com/v1
 OPENAI_MODEL=deepseek-chat
 
@@ -108,7 +108,7 @@ SEARCH_ENGINE=serper
 ## ✅ 配置检查清单
 
 - [ ] 创建 `backend/.env` 文件
-- [ ] 填入 DeepSeek API Key: `sk-808aa93c9409413bbfcf66505a96de94`
+- [ ] 填入 DeepSeek API Key: `your_api_key_here`
 - [ ] 设置 Base URL: `https://api.deepseek.com/v1`
 - [ ] 设置模型: `deepseek-chat`
 - [ ] 配置搜索引擎（推荐 DuckDuckGo）

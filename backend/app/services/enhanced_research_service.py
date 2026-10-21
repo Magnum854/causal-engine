@@ -22,7 +22,8 @@ class EnhancedTargetResearchService:
     def __init__(self):
         self.client = AsyncOpenAI(
             api_key=os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            timeout=60.0  # 60秒超时
         )
         self.model = os.getenv("OPENAI_MODEL", "deepseek-reasoner")
         self.search_service = SearchService()
@@ -171,7 +172,8 @@ class EnhancedTargetResearchService:
         {
             "id": "n1",
             "label": "节点标签（如：美元指数）",
-            "type": "cause|effect|intermediate",
+            "type": "节点数据类型（见下方类型列表）",
+            "causal_role": "cause|effect|intermediate",
             "description": "节点详细描述",
             "confidence": 0.9
         }
@@ -188,12 +190,35 @@ class EnhancedTargetResearchService:
     "explanation": "整体因果关系的综合分析"
 }
 
+【节点数据类型列表】
+定量型（可提取具体数值）：
+- macro_indicator: 宏观经济指标（如GDP、CPI、失业率）
+- monetary_policy: 货币政策（如利率、准备金率）
+- stock_price: 股票价格
+- crypto_price: 加密货币价格
+- forex_rate: 外汇汇率
+- commodity_price: 大宗商品价格
+- interest_rate: 利率
+- inflation_rate: 通胀率
+
+定性型（需要情绪/事件分析）：
+- geopolitical_risk: 地缘政治风险
+- market_sentiment: 市场情绪
+- policy_expectation: 政策预期
+- regulatory_change: 监管变化
+- social_event: 社会事件
+- industry_trend: 行业趋势
+- consumer_confidence: 消费者信心
+- political_stability: 政治稳定性
+- trade_relations: 贸易关系
+
 【分析要求】
 1. 识别 3-7 个核心影响因子（节点）
 2. 构建完整的因果传导路径（边）
-3. 区分直接影响和间接影响
-4. 标注每个因果关系的强度和置信度
-5. 节点 label 必须简洁明确（如"美元指数"、"美联储利率"、"地缘政治风险"）"""
+3. 为每个节点选择最合适的 type（从上述类型列表中选择）
+4. causal_role 表示因果角色：cause（原因）、effect（结果）、intermediate（中间节点）
+5. 节点 label 必须简洁明确（如"美元指数"、"美联储利率"、"地缘政治风险"）
+6. 标注每个因果关系的强度和置信度"""
 
         user_prompt = f"""【目标资产】
 {target}
@@ -230,93 +255,78 @@ class EnhancedTargetResearchService:
         target: str
     ) -> List[Dict[str, Any]]:
         """
-        步骤 2: 自动为节点配置搜索查询
+        步骤 2: 自动为节点配置搜索查询（优化：批量处理）
         
-        使用 LLM 为每个节点生成精准的搜索关键词
+        使用单次 LLM 调用为所有节点生成搜索关键词
         """
         logger.info(f"[查询配置] 开始为 {len(nodes)} 个节点配置搜索查询")
         
-        system_prompt = """你是一个搜索查询优化专家。请为给定的经济/金融节点生成精准的搜索关键词。
+        # 构建节点列表
+        nodes_info = "\n".join([
+            f"{i+1}. {node.get('label', '')} - {node.get('description', '')}"
+            for i, node in enumerate(nodes)
+        ])
+        
+        system_prompt = """你是搜索查询优化专家。为每个节点生成2个精准搜索词（中英文）。
 
-【输出格式】
-必须严格输出以下 JSON 格式：
+【输出格式】JSON数组：
 {
     "queries": [
-        "精准搜索词1（中文）",
-        "精准搜索词2（英文）"
+        {"node_index": 0, "keywords": ["中文搜索词 2024", "English keyword latest"]},
+        {"node_index": 1, "keywords": ["中文搜索词 2024", "English keyword latest"]}
     ]
 }
 
-【查询要求】
-1. 生成 2-3 个搜索查询
-2. 包含中英文关键词
-3. 添加时间限定词（如"2024"、"最新"、"latest"）
-4. 查询要具体、可搜索，避免过于宽泛
-5. 针对数值型指标，使用"价格"、"利率"、"指数"等明确词汇
+【要求】
+- 每个节点2个搜索词（中英文各1个）
+- 包含时间词（2024/最新/latest）
+- 简洁、可搜索"""
 
-【示例】
-节点: "美元指数"
-输出: {"queries": ["美元指数最新走势 2024", "US Dollar Index DXY latest"]}
+        user_prompt = f"""【目标资产】{target}
 
-节点: "美联储利率"
-输出: {"queries": ["美联储利率决议 2024", "Federal Reserve interest rate latest"]}"""
+【节点列表】
+{nodes_info}
 
-        # 并发为所有节点生成查询
-        async def generate_queries_for_node(node: Dict[str, Any]) -> Dict[str, Any]:
-            node_label = node.get("label", "")
-            node_description = node.get("description", "")
+为每个节点生成搜索关键词。"""
+
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.3,
+                max_tokens=1000,
+                response_format={"type": "json_object"}
+            )
             
-            user_prompt = f"""【节点信息】
-标签: {node_label}
-描述: {node_description}
-目标资产: {target}
-
-请生成该节点的搜索查询关键词。"""
-
-            try:
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=0.3,
-                    response_format={"type": "json_object"}
-                )
-                
-                content = response.choices[0].message.content
-                result = json.loads(content)
-                
-                # 注入 sensing_config
-                node["sensing_config"] = {
-                    "auto_queries": result.get("queries", [])
-                }
-                
-                logger.info(f"[查询配置] 节点 '{node_label}' 配置完成: {len(result.get('queries', []))} 个查询")
-                
-            except Exception as e:
-                logger.warning(f"[查询配置] 节点 '{node_label}' 配置失败: {str(e)}")
-                # 降级：使用节点标签作为查询
-                node["sensing_config"] = {
-                    "auto_queries": [f"{node_label} 最新", f"{node_label} latest"]
-                }
+            content = response.choices[0].message.content
+            result = json.loads(content)
             
-            return node
+            # 注入 sensing_config
+            queries_list = result.get("queries", [])
+            for query_item in queries_list:
+                node_idx = query_item.get("node_index", 0)
+                keywords = query_item.get("keywords", [])
+                
+                if 0 <= node_idx < len(nodes):
+                    nodes[node_idx]["sensing_config"] = {
+                        "auto_queries": keywords
+                    }
+            
+            logger.info(f"[查询配置] 批量配置完成: {len(queries_list)} 个节点")
+            
+        except Exception as e:
+            logger.warning(f"[查询配置] 批量配置失败: {str(e)}，使用降级方案")
+            # 降级：使用节点标签作为查询
+            for node in nodes:
+                label = node.get("label", "")
+                node["sensing_config"] = {
+                    "auto_queries": [f"{label} 最新", f"{label} latest"]
+                }
         
-        # 并发处理所有节点
-        import asyncio
-        configured_nodes = await asyncio.gather(
-            *[generate_queries_for_node(node) for node in nodes],
-            return_exceptions=True
-        )
-        
-        # 过滤异常结果
-        valid_nodes = [
-            node for node in configured_nodes 
-            if not isinstance(node, Exception)
-        ]
-        
-        return valid_nodes
+        return nodes
     
     async def _generate_enhanced_explanation(
         self,
@@ -330,7 +340,7 @@ class EnhancedTargetResearchService:
         
         结合因果关系和实时状态数据，生成深度分析报告
         """
-        # 构建节点状态摘要
+        # 构建节点状态摘要（包含数据发布时间）
         node_states = []
         for node in nodes:
             label = node.get("label", "")
@@ -338,8 +348,13 @@ class EnhancedTargetResearchService:
             value = state.get("value", "unknown")
             trend = state.get("trend", "stable")
             context = state.get("narrative_context", "")
+            release_time = state.get("data_release_time", "未知")
             
-            node_states.append(f"- {label}: {value} (趋势: {trend}) - {context}")
+            # 构建包含时间信息的状态描述
+            if release_time != "未知":
+                node_states.append(f"- {label}: {value} (趋势: {trend}) - {context} [数据发布时间: {release_time}]")
+            else:
+                node_states.append(f"- {label}: {value} (趋势: {trend}) - {context}")
         
         node_states_text = "\n".join(node_states)
         
@@ -351,12 +366,19 @@ class EnhancedTargetResearchService:
 3. 指出关键传导机制和风险点
 4. 给出明确的趋势判断和策略建议
 5. 语言专业、逻辑清晰、结论明确
+6. **重要**：凡是引用具体数值，必须标注该数据的发布时间（如"美国2024年第四季度CPI数据显示..."）
 
 【报告结构】
 第一段：核心结论（一句话总结当前状态对目标资产的影响）
-第二段：因果传导分析（详细说明各因子如何影响目标）
-第三段：风险与机会（基于实时数据的判断）
-第四段：策略建议（可操作的投资建议）"""
+第二段：因果传导分析（详细说明各因子如何影响目标，引用数值时必须标注发布时间）
+第三段：风险与机会（基于实时数据的判断，明确数据时效性）
+第四段：策略建议（可操作的投资建议）
+
+【数据引用规范】
+- ✅ 正确："根据2024年12月发布的美国CPI数据显示，通胀率为3.2%..."
+- ✅ 正确："美联储在2024年12月FOMC会议上维持利率在5.25%-5.50%..."
+- ❌ 错误："美国通胀率为3.2%..."（缺少时间）
+- ❌ 错误："美联储利率为5.25%-5.50%..."（缺少时间）"""
 
         user_prompt = f"""【目标资产】
 {target}
@@ -377,7 +399,7 @@ class EnhancedTargetResearchService:
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.6,
-                max_tokens=2000
+                max_tokens=1500  # 限制输出长度，加快响应
             )
             
             enhanced_explanation = response.choices[0].message.content
@@ -387,4 +409,7 @@ class EnhancedTargetResearchService:
             logger.error(f"[报告生成] 失败: {str(e)}")
             # 降级：返回原始分析 + 状态摘要
             return f"{original_explanation}\n\n【实时状态】\n{node_states_text}"
+
+
+
 

@@ -1,118 +1,154 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { Plus, Search, Trash2, WandSparkles } from 'lucide-react'
 
-const EXAMPLES = [
-  '全球变暖会导致什么后果？',
-  '经济衰退的原因是什么？',
-  '人工智能发展对就业市场的影响',
+const INPUT_TYPES = [
+  { value: 'event', label: '事件' },
+  { value: 'data', label: '数据' },
+  { value: 'news', label: '新闻' },
+  { value: 'query', label: '问题' },
 ]
 
-function QueryPanel({ onAnalyze, loading }) {
-  const [query, setQuery] = useState('')
-  const [context, setContext] = useState('')
-  const [maxDepth, setMaxDepth] = useState(3)
+const DEFAULT_INPUTS = [
+  { type: 'event', content: '美联储暂停加息' },
+  { type: 'event', content: '日元套息交易平仓' },
+  { type: 'event', content: '中国房地产危机加深' },
+  { type: 'data', content: '全球黄金 ETF 持仓创新高' },
+]
 
-  const handleSubmit = (e) => {
-    e.preventDefault()
-    if (query.trim()) {
-      onAnalyze(query, context || null, maxDepth)
-    }
+function QueryPanel({ loading, onSynthesize, onDeepAnalyze }) {
+  const [inputs, setInputs] = useState(DEFAULT_INPUTS)
+  const [maxDepth, setMaxDepth] = useState(5)
+  const [mode, setMode] = useState('synthesize')
+
+  const validInputs = useMemo(
+    () => inputs.map((item) => ({ ...item, content: item.content.trim() })).filter((item) => item.content),
+    [inputs],
+  )
+
+  const updateInput = (index, patch) => {
+    setInputs((prev) => prev.map((item, idx) => (idx === index ? { ...item, ...patch } : item)))
   }
 
-  const handleExampleClick = (example) => {
-    setQuery(example)
+  const addInput = () => {
+    setInputs((prev) => [...prev, { type: 'event', content: '' }])
+  }
+
+  const removeInput = (index) => {
+    setInputs((prev) => (prev.length <= 1 ? prev : prev.filter((_, idx) => idx !== index)))
+  }
+
+  const handleSubmit = (event) => {
+    event.preventDefault()
+    if (validInputs.length === 0) return
+    if (mode === 'deep') {
+      onDeepAnalyze({ seedQuery: validInputs[0].content, maxDepth })
+      return
+    }
+    onSynthesize({ inputs: validInputs, maxDepth })
   }
 
   return (
-    <div className="bg-white rounded-lg border border-slate-200 shadow-sm p-6">
-      <h2 className="text-lg font-semibold text-slate-900 mb-5">分析配置</h2>
-      
-      <form onSubmit={handleSubmit} className="space-y-5">
-        {/* 问题输入 */}
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">
-            分析问题 <span className="text-red-500">*</span>
-          </label>
-          <textarea
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="请输入您想要分析的因果问题..."
-            className="w-full px-3 py-2.5 bg-white border border-slate-300 rounded-md text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-transparent transition-all resize-none text-sm"
-            rows={4}
-            required
-          />
+    <form onSubmit={handleSubmit} className="min-h-0 space-y-6">
+      <div>
+        <div className="mb-3 flex rounded-md border border-zinc-200 bg-zinc-50 p-1">
+          <button
+            type="button"
+            onClick={() => setMode('synthesize')}
+            className={`flex-1 rounded px-3 py-2 text-sm ${mode === 'synthesize' ? 'bg-white text-slate-900 shadow-card' : 'text-slate-500'}`}
+          >
+            多输入综合
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('deep')}
+            className={`flex-1 rounded px-3 py-2 text-sm ${mode === 'deep' ? 'bg-white text-slate-900 shadow-card' : 'text-slate-500'}`}
+          >
+            深度扩展
+          </button>
+        </div>
+        <p className="text-xs leading-relaxed text-slate-500">
+          {mode === 'synthesize'
+            ? '输入多条看似不相关的信息，系统会寻找桥接节点和共同影响目标。'
+            : '使用第一条输入作为种子，按层迭代扩展因果图谱。'}
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-medium text-slate-500">输入线索</label>
+          <button
+            type="button"
+            onClick={addInput}
+            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-slate-700"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            添加
+          </button>
         </div>
 
-        {/* 背景信息 */}
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">
-            背景信息（可选）
-          </label>
-          <textarea
-            value={context}
-            onChange={(e) => setContext(e.target.value)}
-            placeholder="提供额外的背景信息以获得更准确的分析..."
-            className="w-full px-3 py-2.5 bg-white border border-slate-300 rounded-md text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-transparent transition-all resize-none text-sm"
-            rows={3}
-          />
-        </div>
-
-        {/* 深度控制 */}
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">
-            分析深度：{maxDepth} 层
-          </label>
-          <input
-            type="range"
-            min="1"
-            max="5"
-            value={maxDepth}
-            onChange={(e) => setMaxDepth(parseInt(e.target.value))}
-            className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-slate-900"
-          />
-          <div className="flex justify-between text-xs text-slate-500 mt-1">
-            <span>简单</span>
-            <span>详细</span>
+        {inputs.map((item, index) => (
+          <div key={index} className="rounded-md border border-zinc-200 bg-white p-3">
+            <div className="mb-2 flex items-center gap-2">
+              <select
+                value={item.type}
+                onChange={(event) => updateInput(index, { type: event.target.value })}
+                className="h-8 rounded-md border border-zinc-200 bg-zinc-50 px-2 text-xs text-slate-700"
+              >
+                {INPUT_TYPES.map((type) => (
+                  <option key={type.value} value={type.value}>
+                    {type.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => removeInput(index)}
+                className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-zinc-50 hover:text-slate-700"
+                title="删除"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+            <textarea
+              value={item.content}
+              onChange={(event) => updateInput(index, { content: event.target.value })}
+              placeholder={mode === 'deep' && index === 0 ? '例如：黄金价格' : '输入事件、数据或问题'}
+              rows={2}
+              className="w-full resize-none rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm leading-relaxed text-slate-800 placeholder:text-slate-400"
+            />
           </div>
+        ))}
+      </div>
+
+      <div>
+        <div className="mb-3 flex items-center justify-between">
+          <label className="text-xs font-medium text-slate-500">分析深度</label>
+          <span className="font-mono text-sm text-slate-800">{maxDepth}</span>
         </div>
-
-        {/* 提交按钮 */}
-        <button
-          type="submit"
-          disabled={loading || !query.trim()}
-          className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white font-medium rounded-md transition-all duration-200 disabled:cursor-not-allowed shadow-sm text-sm"
-        >
-          {loading ? (
-            <span className="flex items-center justify-center gap-2">
-              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-              </svg>
-              分析中...
-            </span>
-          ) : (
-            '开始分析'
-          )}
-        </button>
-      </form>
-
-      {/* 示例问题 */}
-      <div className="mt-6 pt-5 border-t border-slate-200">
-        <h3 className="text-sm font-medium text-slate-700 mb-3">示例问题</h3>
-        <div className="space-y-2">
-          {EXAMPLES.map((example, index) => (
-            <button
-              key={index}
-              onClick={() => handleExampleClick(example)}
-              className="w-full text-left px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 hover:border-slate-300 rounded-md text-sm text-slate-700 transition-all duration-200"
-            >
-              {example}
-            </button>
-          ))}
+        <input
+          type="range"
+          min="1"
+          max="8"
+          value={maxDepth}
+          onChange={(event) => setMaxDepth(Number(event.target.value))}
+          className="w-full accent-slate-900"
+        />
+        <div className="mt-1 flex justify-between font-mono text-[11px] text-slate-400">
+          <span>1</span>
+          <span>8</span>
         </div>
       </div>
-    </div>
+
+      <button
+        type="submit"
+        disabled={loading || validInputs.length === 0}
+        className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-3 text-sm font-medium text-white disabled:bg-zinc-200 disabled:text-slate-400"
+      >
+        {mode === 'synthesize' ? <WandSparkles className="h-4 w-4" /> : <Search className="h-4 w-4" />}
+        {loading ? '分析中' : mode === 'synthesize' ? '综合分析' : '深度分析'}
+      </button>
+    </form>
   )
 }
 
 export default QueryPanel
-
