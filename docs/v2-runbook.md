@@ -1,68 +1,68 @@
 # CausalFlow v2 Runbook
 
-Last updated: 2026-05-05
+Last updated: 2026-10-21
 
-## Local Startup
+## Local startup
 
-Backend:
+Run commands from the repository root unless noted otherwise. Install Python dependencies with `python -m pip install -r backend/requirements.txt` and frontend dependencies with `npm ci --prefix frontend`.
+
+Backend (from `backend`):
 
 ```powershell
-cd "X:\vibe coding\6 因果引擎\backend"
 python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-Frontend:
+Frontend (in a second terminal, from `frontend`):
 
 ```powershell
-cd "X:\vibe coding\6 因果引擎\frontend"
-npm.cmd run dev -- --host 0.0.0.0 --port 5173
+npm.cmd run dev
 ```
 
-Open `http://localhost:5173`.
+Open `http://localhost:5173`. The Vite development proxy forwards `/api` to `http://localhost:8000`. The app defaults to the `/api/v2` API path.
 
-## Environment Variables
+## Same-origin Docker deployment
 
-Set these in `backend/.env` when real LLM/search enrichment is needed. See `backend/.env.example` for a template.
+The root `Dockerfile` builds the frontend and serves it from FastAPI. Compose runs one `causalflow` service; no separate frontend container, Nginx container, domain edit, or `frontend/Dockerfile` is required.
 
-```env
-OPENAI_API_KEY=your_key_here
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4o-mini
-TAVILY_API_KEY=optional
-SERPER_API_KEY=optional
-CAUSAL_V2_DB=optional/path/to/causal_v2.sqlite3
+```powershell
+docker compose config
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=100 causalflow
 ```
 
-The v2 service can still create deterministic fallback graphs without `OPENAI_API_KEY`.
+Open `http://localhost:8000`; API docs are at `/docs` and the health endpoint is `/health`. Without credentials, v2 can create rule-based fallback graphs. Live enrichment needs the matching provider configuration.
+
+## Optional provider configuration
+
+Copy `backend/.env.example` to `backend/.env`, fill only the providers you use, and then pass that file explicitly:
+
+```powershell
+Copy-Item backend/.env.example backend/.env
+docker compose --env-file backend/.env up -d --build
+```
+
+For local non-Docker startup, the backend loads `backend/.env` directly. Leave keys blank for the no-LLM fallback. Never paste the resolved output of `docker compose --env-file backend/.env config` into public logs because it can contain secrets.
+
+`VITE_API_BASE_URL`, when set for a separate frontend host, must be the full v2 API prefix, for example `https://api.example.com/api/v2`. It is a frontend build-time setting. The root Docker deployment normally uses `/api/v2` and needs no override.
+
+## Runtime state and updates
+
+- Local startup stores SQLite sessions under `backend/data/` by default.
+- Compose sets `CAUSAL_V2_DB=/app/data/causal_v2.sqlite3` and persists `/app/data` in the `causalflow-data` named volume.
+- `docker compose down` stops/removes containers while preserving the volume. The `-v` option deletes its stored session data and should only be used intentionally.
+- To update, run `docker compose up -d --build` again, adding `--env-file backend/.env` when applicable.
+- Runtime databases and private `.env` files are excluded from Git and Docker build contexts.
 
 ## Verification
 
-Backend import check:
+From the repository root:
 
 ```powershell
-cd "X:\vibe coding\6 因果引擎"
-python -m py_compile backend\main.py backend\app\api\v2_router.py backend\app\services\v2_analysis_service.py
+python -m unittest discover -s backend/tests -p "test_v2_offline.py"
+npm.cmd run build --prefix frontend
 ```
 
-Frontend build:
+The regression checks use empty credentials, a temporary SQLite file, offline node enrichment, and no external provider calls. They cover session creation, synthesis SSE, node expansion, undo, persistence and missing-session responses. They do not verify paid provider credentials, real-time data or a public deployment.
 
-```powershell
-cd "X:\vibe coding\6 因果引擎\frontend"
-npm.cmd run build
-```
-
-In the Codex sandbox, `npm.cmd run build` may fail with `spawn EPERM` unless escalation is allowed, because Vite/esbuild starts a child process.
-
-## Runtime State
-
-- SQLite sessions are stored under `backend/data/` by default.
-- Treat `backend/data/` as local runtime state.
-- Do not commit generated SQLite files.
-
-## Common UI Checks
-
-- Add many input clues in the left sidebar and verify the input panel scrolls.
-- Generate a multi-input graph and verify default graph mode shows a readable backbone rather than every edge.
-- Click a node and verify focused one-hop edges appear.
-- Use cluster filter buttons to isolate one macro domain.
-
+UI checks: enter several clues, generate a graph, inspect backbone/focus edge modes, filter clusters, expand a node and undo. A successful image build or `/health` response alone does not prove all interactive UI flows.

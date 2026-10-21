@@ -90,6 +90,8 @@
 
 ## 快速开始
 
+Docker 同源部署使用仓库根目录的 `Dockerfile` 与 `docker-compose.yml`，运行 `docker compose up -d --build` 后打开 `http://localhost:8000`。无密钥时可先体验 v2 规则图谱；持久化、可选环境配置与启动检查见 [v2 runbook](docs/v2-runbook.md) 和 [部署指南](DEPLOYMENT.md)。
+
 ### 方法 1: 使用自动配置脚本（推荐）
 
 **Windows 用户:**
